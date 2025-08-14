@@ -823,8 +823,8 @@ def build_ui():
                         ui.button('Löschen', on_click=confirm_delete, color='negative')
                 dialog.open()
 
-            ui.button('✏️ Eintrag bearbeiten (Auswahl)', on_click=edit_selected)
-            ui.button('🗑️ Eintrag löschen (Auswahl)', on_click=delete_selected).props('color=negative')
+            ui.button('✏️ Eintrag bearbeiten', on_click=edit_selected)
+            ui.button('🗑️ Eintrag löschen', on_click=delete_selected).props('color=negative')
 
         with ui.scroll_area().style('max-height: 75vh'):
             table = ui.table(
@@ -838,7 +838,7 @@ def build_ui():
     # ---------- Logout unten rechts (nach Verlauf) ----------
     if APP_PASSWORD:
         with ui.row().classes('justify-end m-3'):
-            ui.button('Logout', on_click=do_logout).props('flat')
+            ui.button('Tschüüüs', on_click=do_logout).props('flat')
 
     def _refresh_table_impl():
         rebuild_rows()
