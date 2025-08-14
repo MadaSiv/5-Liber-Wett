@@ -222,6 +222,79 @@ class Pot:
                     sevi += amt
         return q(sven), q(sevi)
 
+# ========== DB (optional, via DATABASE_URL) ==========
+DATABASE_URL = os.getenv("DATABASE_URL")
+USE_DB = bool(DATABASE_URL)
+if USE_DB:
+    from sqlalchemy import create_engine, Column, Integer, String, DateTime, Numeric, Text
+    from sqlalchemy.orm import declarative_base, sessionmaker
+
+    engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
+    SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+    Base = declarative_base()
+
+    class TransactionRow(Base):
+        __tablename__ = "transactions"
+        id = Column(Integer, primary_key=True, autoincrement=True)
+        timestamp = Column(DateTime(timezone=True), nullable=False)
+        kind = Column(String(16), nullable=False)
+        losers = Column(Text, default="")
+        comment = Column(Text, default="")
+        delta = Column(Numeric(18, 2), nullable=False)             # für BET/BEER
+        payer = Column(String(32), default="")
+        receiver = Column(String(32), default="")
+        transfer_amount = Column(Numeric(18, 2), nullable=False)   # für TRANSFER
+
+    class MetaRow(Base):
+        __tablename__ = "meta"
+        id = Column(Integer, primary_key=True)  # immer 1
+        last_reset = Column(DateTime(timezone=True), nullable=True)
+
+    def db_init():
+        Base.metadata.create_all(engine)
+
+    def db_load_state(pot_obj):
+        with SessionLocal() as s:
+            # history laden
+            rows = s.query(TransactionRow).order_by(TransactionRow.timestamp.asc(), TransactionRow.id.asc()).all()
+            pot_obj.history.clear()
+            for r in rows:
+                pot_obj.history.append(Transaction(
+                    timestamp=r.timestamp,
+                    kind=Kind(r.kind),
+                    losers=r.losers or "",
+                    comment=r.comment or "",
+                    delta=Decimal(r.delta or 0).quantize(CENT),
+                    payer=r.payer or "",
+                    receiver=r.receiver or "",
+                    transfer_amount=Decimal(r.transfer_amount or 0).quantize(CENT),
+                ))
+            # last_reset laden
+            m = s.get(MetaRow, 1)
+            pot_obj.last_reset = m.last_reset if m else None
+            pot_obj.recalc_balance()
+
+    def db_save_state_full(pot_obj):
+        # einfache, robuste Strategie: Tabelle neu schreiben
+        with SessionLocal() as s:
+            s.query(TransactionRow).delete()
+            for t in pot_obj.history:
+                s.add(TransactionRow(
+                    timestamp=t.timestamp,
+                    kind=t.kind.value,
+                    losers=t.losers,
+                    comment=t.comment,
+                    delta=q(t.delta),
+                    payer=t.payer,
+                    receiver=t.receiver,
+                    transfer_amount=q(t.transfer_amount),
+                ))
+            m = s.get(MetaRow, 1)
+            if not m:
+                m = MetaRow(id=1)
+                s.add(m)
+            m.last_reset = pot_obj.last_reset
+            s.commit()
 
 # ==========
 #   State
@@ -231,13 +304,21 @@ pot = Pot()
 
 
 def load_state() -> None:
+    if USE_DB:
+        db_init()
+        db_load_state(pot)
+        return
+    # Fallback: JSON
     if DEFAULT_PATH.exists():
         with open(DEFAULT_PATH, "r", encoding="utf-8") as f:
             pot.from_data(json.load(f))
         pot.recalc_balance()
 
-
 def save_state() -> None:
+    if USE_DB:
+        db_save_state_full(pot)
+        return
+    # Fallback: JSON
     DEFAULT_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(DEFAULT_PATH, "w", encoding="utf-8") as f:
         json.dump(pot.to_data(), f, ensure_ascii=False, indent=2)
@@ -585,3 +666,4 @@ ui.run(
     reload=False,
     storage_secret=STORAGE_SECRET,
 )
+
