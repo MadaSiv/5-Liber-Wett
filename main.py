@@ -11,6 +11,7 @@ from typing import List, Optional
 import json
 import csv
 import io
+import urllib.parse  # <- NEU
 
 from nicegui import ui, app
 
@@ -794,29 +795,45 @@ def build_ui():
 
             # === CSV-Export (vollständiges Format) ===
             def export_csv():
-                output = io.StringIO()
-                with lock:
-                    lr = pot.last_reset.isoformat() if pot.last_reset else ""
-                if lr:
-                    output.write(f"# last_reset={lr}\n")
-                writer = csv.writer(output)
-                writer.writerow(["timestamp", "kind", "delta", "losers", "payer", "receiver", "transfer_amount", "comment"])
-                with lock:
-                    for t in pot.history:
-                        writer.writerow([
-                            t.timestamp.isoformat(),
-                            t.kind.value,
-                            f"{q(t.delta):.2f}",
-                            t.losers,
-                            t.payer,
-                            t.receiver,
-                            f"{q(t.transfer_amount):.2f}",
-                            t.comment,
-                        ])
-                data = output.getvalue().encode('utf-8')
-                ts_name = datetime.now(CH_TZ).strftime("%Y%m%d_%H%M%S")
-                ui.download(data=data, filename=f"verlauf_export_{ts_name}.csv")
-                ui.notify('CSV exportiert.', type='positive')
+                try:
+                    output = io.StringIO()
+                    with lock:
+                        lr = pot.last_reset.isoformat() if pot.last_reset else ""
+                    if lr:
+                        output.write(f"# last_reset={lr}\n")
+                    writer = csv.writer(output)
+                    writer.writerow(["timestamp", "kind", "delta", "losers", "payer", "receiver", "transfer_amount", "comment"])
+                    with lock:
+                        for t in pot.history:
+                            writer.writerow([
+                                t.timestamp.isoformat(),
+                                t.kind.value,
+                                f"{q(t.delta):.2f}",
+                                t.losers,
+                                t.payer,
+                                t.receiver,
+                                f"{q(t.transfer_amount):.2f}",
+                                t.comment,
+                            ])
+                    csv_text = output.getvalue()
+                    ts_name = datetime.now(CH_TZ).strftime("%Y%m%d_%H%M%S")
+                    filename = f"verlauf_export_{ts_name}.csv"
+
+                    # 1) Versuche NiceGUI-eigenes Download
+                    try:
+                        ui.download(content=csv_text, filename=filename)
+                    except Exception:
+                        # 2) Fallback: Data-URL + JS (funktioniert überall)
+                        data_url = "data:text/csv;charset=utf-8," + urllib.parse.quote(csv_text)
+                        ui.run_javascript(
+                            "const a=document.createElement('a');"
+                            f"a.href='{data_url}';"
+                            f"a.download='{filename}';"
+                            "document.body.appendChild(a);a.click();a.remove();"
+                        )
+                    ui.notify('CSV exportiert.', type='positive')
+                except Exception as ex:
+                    ui.notify(f'Export-Fehler: {ex}', type='negative')
 
             # === CSV-Import (überschreibt alles) ===
             import_dialog = ui.dialog()
@@ -829,37 +846,37 @@ def build_ui():
                 status_label = ui.label().style('opacity:0.8')
 
                 def handle_upload(e):
-                    content = e.content.read() if hasattr(e.content, 'read') else e.content
-                    text = content.decode('utf-8-sig', errors='replace')
-                    lines = text.splitlines()
-
-                    imported_last_reset: Optional[datetime] = None
-                    while lines and lines[0].startswith('#'):
-                        line = lines.pop(0)
-                        if line.lower().startswith('# last_reset='):
-                            val = line.split('=', 1)[1].strip()
-                            if val:
-                                try:
-                                    dt = datetime.fromisoformat(val)
-                                    if dt.tzinfo is None:
-                                        dt = dt.replace(tzinfo=timezone.utc)
-                                    imported_last_reset = dt.astimezone(CH_TZ)
-                                except Exception:
-                                    pass
-
-                    if not lines:
-                        status_label.text = 'Leere Datei.'
-                        return
-
-                    reader = csv.DictReader(lines)
-                    required = {"timestamp", "kind", "delta", "losers", "payer", "receiver", "transfer_amount", "comment"}
-                    hdr = set(reader.fieldnames or [])
-                    if set(h.lower() for h in hdr) != required:
-                        status_label.text = 'CSV-Header entspricht nicht dem erwarteten Format.'
-                        return
-
-                    new_hist: List[Transaction] = []
                     try:
+                        content = e.content.read() if hasattr(e.content, 'read') else e.content
+                        text = content.decode('utf-8-sig', errors='replace')
+                        lines = text.splitlines()
+
+                        imported_last_reset: Optional[datetime] = None
+                        while lines and lines[0].startswith('#'):
+                            line = lines.pop(0)
+                            if line.lower().startswith('# last_reset='):
+                                val = line.split('=', 1)[1].strip()
+                                if val:
+                                    try:
+                                        dt = datetime.fromisoformat(val)
+                                        if dt.tzinfo is None:
+                                            dt = dt.replace(tzinfo=timezone.utc)
+                                        imported_last_reset = dt.astimezone(CH_TZ)
+                                    except Exception:
+                                        pass
+
+                        if not lines:
+                            status_label.text = 'Leere Datei.'
+                            return
+
+                        reader = csv.DictReader(lines)
+                        required = {"timestamp", "kind", "delta", "losers", "payer", "receiver", "transfer_amount", "comment"}
+                        hdr = set(reader.fieldnames or [])
+                        if set(h.lower() for h in hdr) != required:
+                            status_label.text = 'CSV-Header entspricht nicht dem erwarteten Format.'
+                            return
+
+                        new_hist: List[Transaction] = []
                         for row in reader:
                             d = {k.lower(): (v or "") for k, v in row.items()}
                             ts = datetime.fromisoformat(d["timestamp"]) if d["timestamp"] else datetime.now(CH_TZ)
@@ -879,18 +896,17 @@ def build_ui():
                                 receiver=d["receiver"],
                                 transfer_amount=t_amt,
                             ))
-                    except Exception as ex:
-                        status_label.text = f'Fehler beim Parsen: {ex}'
-                        return
 
-                    with lock:
-                        pot.history = new_hist
-                        pot.recalc_balance()
-                        pot.last_reset = imported_last_reset
-                        save_state()
-                    ui.notify('Import abgeschlossen. Verlauf überschrieben.', type='positive')
-                    refresh_top(); refresh_table()
-                    import_dialog.close()
+                        with lock:
+                            pot.history = new_hist
+                            pot.recalc_balance()
+                            pot.last_reset = imported_last_reset
+                            save_state()
+                        ui.notify('Import abgeschlossen. Verlauf überschrieben.', type='positive')
+                        refresh_top(); refresh_table()
+                        import_dialog.close()
+                    except Exception as ex:
+                        status_label.text = f'Fehler: {ex}'
 
                 ui.upload(on_upload=handle_upload, label='CSV auswählen …').props('accept=.csv')
                 with ui.row().classes('justify-end gap-2 mt-3'):
