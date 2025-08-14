@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os
+import secrets
 import threading
 from dataclasses import dataclass, field
 from decimal import Decimal, getcontext, ROUND_HALF_UP
@@ -516,10 +517,14 @@ def index():
     build_ui()
 
 
+# Secret für Session-Speicher (wichtig für app.storage.user)
+STORAGE_SECRET = os.getenv("STORAGE_SECRET") or secrets.token_urlsafe(32)
+
 # Run (Render setzt $PORT automatisch)
 ui.run(
     title='5 Franken Wette',
     host='0.0.0.0',
     port=int(os.getenv('PORT', '8080')),
     reload=False,
+    storage_secret=STORAGE_SECRET,  # <<<< wichtig!
 )
