@@ -346,22 +346,20 @@ def ts_fmt(dt: datetime) -> str:
 def build_ui():
     """Haupt-App (nur für eingeloggte Nutzer)."""
 
-    # Header
+    # Header (fixiert): Titel links; rechts eine Spalte mit Gesamtsaldo + Personensalden
     with ui.header().classes('items-center justify-between bg-white'):
         ui.label('🍺 5-Franken-Wette').style(f'color:{TEXT}; font-weight:700; font-size:20px')
-        right_row = ui.row().classes('items-center gap-3')
-        with right_row:
+        with ui.column().classes('items-end gap-0'):
             balance_label = ui.label().style(f'color:{TEXT}; font-size:16px')
+            with ui.row().classes('items-center gap-3'):
+                sven_label = ui.label().style('opacity:0.8')
+                sevi_label = ui.label().style('opacity:0.8')
+            # optional Logout-Button unter die Salden
             if APP_PASSWORD:
                 def do_logout():
                     app.storage.user.pop('auth_ok', None)
                     ui.navigate.to('/login')
-                ui.button('Logout', on_click=do_logout).props('flat')
-
-    # Personensalden
-    with ui.row().classes('items-center gap-4 px-4 py-1'):
-        sven_label = ui.label().style(f'color:{TEXT}; opacity:0.8')
-        sevi_label = ui.label().style(f'color:{TEXT}; opacity:0.8')
+                ui.button('Logout', on_click=do_logout).props('flat size=sm').classes('mt-1')
 
     # --- Refresh-Funktionen ---
     def refresh_top():
@@ -574,9 +572,9 @@ def build_ui():
                 pay = payer_in.value or 'Sven'
                 rec = 'Sevi' if pay == 'Sven' else 'Sven'
                 receiver_label.text = f'Empfänger: {rec}'
-                # Verfügbarkeit berechnen, aktuellen Transfer temporär zurückrechnen
                 with lock:
                     sven_total, sevi_total = pot.person_totals()
+                    # aktuellen Transfer neutralisieren
                     if t.payer == "Sven":
                         sven_total += t.transfer_amount
                         sevi_total -= t.transfer_amount
@@ -606,7 +604,6 @@ def build_ui():
                         t.receiver = receiver
                         t.transfer_amount = amt
                         t.comment = (comment_in.value or '').strip()
-                        # Pot-Saldo bleibt unverändert
                         save_state()
                     ui.notify('Transfer aktualisiert.', type='positive')
                     refresh_top(); refresh_table()
@@ -623,7 +620,7 @@ def build_ui():
 
         dialog.open()
 
-    # ---------- WEITERE DIALOGE (neu anlegen) ----------
+    # ---------- NEU ANLEGEN: Wette / Bier / Transfer / Ausgleich / Reset ----------
     def dlg_neue_wette():
         with ui.dialog() as dialog, ui.card().classes('min-w-[360px]'):
             ui.label('🎲 Neue Wette').classes('text-lg font-semibold')
@@ -716,13 +713,29 @@ def build_ui():
                 ui.button('Buchen', on_click=do_book, color='primary')
         dialog.open()
 
+    def do_reset():
+        with ui.dialog() as dialog, ui.card():
+            ui.label('🧹 Verlauf & Saldo löschen').classes('text-lg font-semibold')
+            ui.label('Wirklich Verlauf & Saldo komplett löschen?')
+            def yes():
+                with lock:
+                    pot.reset()
+                    save_state()
+                refresh_top(); refresh_table()
+                ui.notify('Verlauf und Saldo wurden gelöscht.', type='positive')
+                dialog.close()
+            with ui.row().classes('justify-end gap-2 mt-3'):
+                ui.button('Abbrechen', on_click=dialog.close)
+                ui.button('Löschen', on_click=yes, color='negative')
+        dialog.open()
+
     # ---------- FUNKTIONS-BUTTONS (MOBILE-FIRST, VOR VERLAUF) ----------
     with ui.column().classes('gap-2 px-3 pt-2 max-w-screen-sm mx-auto'):
         ui.button('🎲 Neue Wette', on_click=dlg_neue_wette).classes('w-full py-3 rounded-xl shadow-sm')
         ui.button('🍺 Bier bezahlen', on_click=dlg_bier_bezahlen).classes('w-full py-3 rounded-xl shadow-sm')
         ui.button('🔁 Geld transferieren', on_click=open_transfer_dialog).classes('w-full py-3 rounded-xl shadow-sm')
         ui.button('🤝 Ausgleich vorschlagen', on_click=dlg_ausgleich).classes('w-full py-3 rounded-xl shadow-sm')
-        ui.button('🧹 Verlauf & Saldo löschen', on_click=lambda: do_reset()).props('color=negative').classes('w-full py-3 rounded-xl shadow-sm')
+        ui.button('🧹 Verlauf & Saldo löschen', on_click=do_reset).props('color=negative').classes('w-full py-3 rounded-xl shadow-sm')
 
     # ---------- VERLAUF (BREIT) ----------
     table_rows: list[dict] = []
@@ -742,7 +755,7 @@ def build_ui():
                 else:
                     main = f"Ausgleich → {t.payer} → {t.receiver}."
                 table_rows.append({
-                    'id': idx,  # für Auswahl/Bearbeiten
+                    'id': idx,  # für Auswahl/Bearbeiten/Löschen
                     'Zeit': ts_fmt(t.timestamp),
                     'Typ': TYPE_LABELS.get(t.kind, t.kind.value),
                     'Betrag': betrag_display,
@@ -761,25 +774,55 @@ def build_ui():
     with ui.card().classes('m-3 w-full max-w-screen-2xl mx-auto'):
         ui.label('📜 Verlauf').style(f'color:{TEXT}; font-weight:600')
 
-        # Bearbeiten-Button, entscheidet je Typ
-        def edit_selected():
-            sel = table.selected
-            if not sel:
-                ui.notify('Bitte zuerst eine Zeile auswählen.', type='warning'); return
-            row = sel[0]
-            idx = int(row['id'])
-            with lock:
-                t = pot.history[idx]
-            if t.kind == Kind.BET:
-                open_edit_bet_dialog(idx)
-            elif t.kind == Kind.BEER:
-                open_edit_beer_dialog(idx)
-            elif t.kind == Kind.TRANSFER:
-                open_edit_transfer_dialog(idx)
-            else:
-                ui.notify('Unbekannter Typ.', type='warning')
+        # Aktionen: Bearbeiten & Löschen
+        with ui.row().classes('gap-2 mb-2'):
+            def edit_selected():
+                sel = table.selected
+                if not sel:
+                    ui.notify('Bitte zuerst eine Zeile auswählen.', type='warning'); return
+                row = sel[0]
+                idx = int(row['id'])
+                with lock:
+                    t = pot.history[idx]
+                if t.kind == Kind.BET:
+                    open_edit_bet_dialog(idx)
+                elif t.kind == Kind.BEER:
+                    open_edit_beer_dialog(idx)
+                elif t.kind == Kind.TRANSFER:
+                    open_edit_transfer_dialog(idx)
+                else:
+                    ui.notify('Unbekannter Typ.', type='warning')
 
-        ui.button('✏️ Eintrag bearbeiten (Auswahl)', on_click=edit_selected).classes('mb-2')
+            def delete_selected():
+                sel = table.selected
+                if not sel:
+                    ui.notify('Bitte zuerst eine Zeile auswählen.', type='warning'); return
+                row = sel[0]
+                idx = int(row['id'])
+                with lock:
+                    if idx < 0 or idx >= len(pot.history):
+                        ui.notify('Ungültige Auswahl.', type='negative'); return
+                    t = pot.history[idx]
+
+                # Sicherheitsabfrage
+                with ui.dialog() as dialog, ui.card().classes('min-w-[360px]'):
+                    ui.label('🗑️ Eintrag löschen').classes('text-lg font-semibold')
+                    ui.label(f'Diesen Eintrag wirklich löschen?\nTyp: {TYPE_LABELS.get(t.kind, t.kind.value)} | Zeit: {ts_fmt(t.timestamp)}')
+                    def confirm_delete():
+                        with lock:
+                            del pot.history[idx]
+                            pot.recalc_balance()
+                            save_state()
+                        refresh_top(); refresh_table()
+                        ui.notify('Eintrag gelöscht.', type='positive')
+                        dialog.close()
+                    with ui.row().classes('justify-end gap-2 mt-3'):
+                        ui.button('Abbrechen', on_click=dialog.close)
+                        ui.button('Löschen', on_click=confirm_delete, color='negative')
+                dialog.open()
+
+            ui.button('✏️ Eintrag bearbeiten (Auswahl)', on_click=edit_selected)
+            ui.button('🗑️ Eintrag löschen (Auswahl)', on_click=delete_selected).props('color=negative')
 
         with ui.scroll_area().style('max-height: 75vh'):
             table = ui.table(
