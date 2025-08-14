@@ -280,18 +280,7 @@ def build_ui():
         sven_label = ui.label().style(f'color:{TEXT}; opacity:0.8')
         sevi_label = ui.label().style(f'color:{TEXT}; opacity:0.8')
 
-    # ---------- FUNKTIONS-BUTTONS (MOBILE-FIRST, VOR VERLAUF) ----------
-    with ui.column().classes('gap-2 px-3 pt-2 max-w-screen-sm mx-auto'):
-        ui.button('🎲 Neue Wette', on_click=lambda: dlg_neue_wette()).classes('w-full py-3 rounded-xl shadow-sm')
-        ui.button('🍺 Bier bezahlen', on_click=lambda: dlg_bier_bezahlen()).classes('w-full py-3 rounded-xl shadow-sm')
-        ui.button('🔁 Geld transferieren', on_click=lambda: dlg_transfer()).classes('w-full py-3 rounded-xl shadow-sm')
-        ui.button('🤝 Ausgleich vorschlagen', on_click=lambda: dlg_ausgleich()).classes('w-full py-3 rounded-xl shadow-sm')
-        ui.button('🧹 Verlauf & Saldo löschen', on_click=lambda: do_reset()).props('color=negative').classes('w-full py-3 rounded-xl shadow-sm')
-
-    # ---------- VERLAUF ----------
-    table_rows: list[dict] = []
-    sum_label = ui.label().style(f'color:{TEXT}; font-weight:700')
-
+    # --- Refresh-Funktionen (nutzen Komponenten oben & unten) ---
     def refresh_top():
         with lock:
             pot.recalc_balance()
@@ -299,61 +288,6 @@ def build_ui():
             balance_label.text = f'Aktueller Saldo: {chf(pot.balance)}'
             sven_label.text = f'Sven: {sven:.2f} CHF'
             sevi_label.text = f'Sevi: {sevi:.2f} CHF'
-
-    def rebuild_rows() -> None:
-        table_rows.clear()
-        total = Decimal("0.00")
-        with lock:
-            for t in pot.history:
-                if t.kind == Kind.TRANSFER:
-                    betrag_display = f"{q(t.transfer_amount):.2f}"
-                else:
-                    betrag_display = f"{q(t.delta):.2f}"
-                    total += q(t.delta)
-                if t.kind == Kind.BET:
-                    main = f"Verlierer → {t.losers}."
-                elif t.kind == Kind.BEER:
-                    main = f"Zahler → {t.payer or '?'}."
-                else:
-                    main = f"Ausgleich → {t.payer} → {t.receiver}."
-                table_rows.append({
-                    'Zeit': ts_fmt(t.timestamp),
-                    'Typ': TYPE_LABELS.get(t.kind, t.kind.value),
-                    'Betrag': betrag_display,
-                    'Verlierer/Zahler/Ausgleich': main,
-                    'Kommentar': t.comment,
-                })
-        sum_label.text = f"Summe angezeigt: {q(total):.2f} CHF"
-
-    columns = [
-        {'name': 'Zeit', 'label': 'Zeit', 'field': 'Zeit', 'sortable': True},
-        {'name': 'Typ', 'label': 'Typ', 'field': 'Typ', 'sortable': True},
-        {'name': 'Betrag', 'label': 'Betrag', 'field': 'Betrag', 'sortable': True},
-        {'name': 'Verlierer/Zahler/Ausgleich', 'label': 'Verlierer/Zahler/Ausgleich', 'field': 'Verlierer/Zahler/Ausgleich', 'sortable': True},
-        {'name': 'Kommentar', 'label': 'Kommentar', 'field': 'Kommentar', 'sortable': True},
-    ]
-
-    with ui.card().classes('m-3 max-w-screen-lg mx-auto'):
-        ui.label('📜 Verlauf').style(f'color:{TEXT}; font-weight:600')
-        # Scrollbarer Bereich mit sticky Header für Mobile
-        with ui.scroll_area().style('max-height: 60vh'):
-            table = ui.table(
-                columns=columns,
-                rows=table_rows,
-                row_key='Zeit',
-            ).props('flat bordered dense wrap-cells sticky-header')
-        with ui.row().classes('justify-between items-center mt-2'):
-            last_reset_label = ui.label().style('opacity:0.7')
-            sum_label
-
-    def refresh_table():
-        rebuild_rows()
-        table.update()
-        with lock:
-            if pot.last_reset is None:
-                last_reset_label.text = "Zuletzt zurückgesetzt: nie"
-            else:
-                last_reset_label.text = "Zuletzt zurückgesetzt: " + pot.last_reset.astimezone(CH_TZ).strftime("%d.%m.%Y %H:%M")
 
     # ---------- Dialoge / Aktionen ----------
     def dlg_neue_wette():
@@ -507,11 +441,73 @@ def build_ui():
                 ui.button('Löschen', on_click=yes, color='negative')
         dialog.open()
 
+    # ---------- FUNKTIONS-BUTTONS (MOBILE-FIRST, VOR VERLAUF) ----------
+    with ui.column().classes('gap-2 px-3 pt-2 max-w-screen-sm mx-auto'):
+        ui.button('🎲 Neue Wette', on_click=dlg_neue_wette).classes('w-full py-3 rounded-xl shadow-sm')
+        ui.button('🍺 Bier bezahlen', on_click=dlg_bier_bezahlen).classes('w-full py-3 rounded-xl shadow-sm')
+        ui.button('🔁 Geld transferieren', on_click=dlg_transfer).classes('w-full py-3 rounded-xl shadow-sm')
+        ui.button('🤝 Ausgleich vorschlagen', on_click=dlg_ausgleich).classes('w-full py-3 rounded-xl shadow-sm')
+        ui.button('🧹 Verlauf & Saldo löschen', on_click=do_reset).props('color=negative').classes('w-full py-3 rounded-xl shadow-sm')
+
+    # ---------- VERLAUF (BREITER) ----------
+    table_rows: list[dict] = []
+
+    def rebuild_rows() -> None:
+        table_rows.clear()
+        with lock:
+            for t in pot.history:
+                if t.kind == Kind.TRANSFER:
+                    betrag_display = f"{q(t.transfer_amount):.2f}"
+                else:
+                    betrag_display = f"{q(t.delta):.2f}"
+                if t.kind == Kind.BET:
+                    main = f"Verlierer → {t.losers}."
+                elif t.kind == Kind.BEER:
+                    main = f"Zahler → {t.payer or '?'}."
+                else:
+                    main = f"Ausgleich → {t.payer} → {t.receiver}."
+                table_rows.append({
+                    'Zeit': ts_fmt(t.timestamp),
+                    'Typ': TYPE_LABELS.get(t.kind, t.kind.value),
+                    'Betrag': betrag_display,
+                    'Verlierer/Zahler/Ausgleich': main,
+                    'Kommentar': t.comment,
+                })
+
+    columns = [
+        {'name': 'Zeit', 'label': 'Zeit', 'field': 'Zeit', 'sortable': True},
+        {'name': 'Typ', 'label': 'Typ', 'field': 'Typ', 'sortable': True},
+        {'name': 'Betrag', 'label': 'Betrag', 'field': 'Betrag', 'sortable': True},
+        {'name': 'Verlierer/Zahler/Ausgleich', 'label': 'Verlierer/Zahler/Ausgleich', 'field': 'Verlierer/Zahler/Ausgleich', 'sortable': True},
+        {'name': 'Kommentar', 'label': 'Kommentar', 'field': 'Kommentar', 'sortable': True},
+    ]
+
+    last_reset_label = None  # wird gleich belegt
+
+    with ui.card().classes('m-3 w-full max-w-screen-2xl mx-auto'):
+        ui.label('📜 Verlauf').style(f'color:{TEXT}; font-weight:600')
+        # grosszügig in der Breite, Höhe begrenzt mit Sticky-Header
+        with ui.scroll_area().style('max-height: 75vh'):
+            table = ui.table(
+                columns=columns,
+                rows=table_rows,
+                row_key='Zeit',
+            ).props('flat bordered dense sticky-header wrap-cells')
+        last_reset_label = ui.label().style('opacity:0.7; display:block; margin-top:6px')
+
+    def refresh_table():
+        rebuild_rows()
+        table.update()
+        with lock:
+            if pot.last_reset is None:
+                last_reset_label.text = "Zuletzt zurückgesetzt: nie"
+            else:
+                last_reset_label.text = "Zuletzt zurückgesetzt: " + pot.last_reset.astimezone(CH_TZ).strftime("%d.%m.%Y %H:%M")
+
     # Initial refresh
     def initial_refresh():
         refresh_top()
         refresh_table()
-
     initial_refresh()
 
 
@@ -549,6 +545,9 @@ def login_page():
                 ui.navigate.to('/app')
             else:
                 ui.notify('Falsches Passwort', type='negative')
+
+        # Enter-Handling für das Passwortfeld
+        pwd.on('keydown.enter', lambda e: do_login())
 
         ui.button('Login', on_click=do_login, color='primary').classes('mt-3')
 
