@@ -431,17 +431,15 @@ def build_ui():
         tr_update_info()
         transfer_dialog.open()
 
-    # ---------- WETTE BEARBEITEN (Dialog) ----------
+    # ---------- BEARBEITEN: Wette ----------
     def open_edit_bet_dialog(idx: int):
-        # Schutz: Index prüfen
         with lock:
             if idx < 0 or idx >= len(pot.history):
                 ui.notify('Ungültige Auswahl.', type='negative'); return
             t = pot.history[idx]
         if t.kind != Kind.BET:
-            ui.notify('Nur Wetten können bearbeitet werden.', type='warning'); return
+            ui.notify('Nur Wetten können hier bearbeitet werden.', type='warning'); return
 
-        # Stake aus aktuellem Eintrag ableiten
         def infer_stake() -> Decimal:
             losers = 0
             if "Sven verliert" in t.losers:
@@ -503,7 +501,129 @@ def build_ui():
 
         dialog.open()
 
-    # ---------- WEITERE DIALOGE ----------
+    # ---------- BEARBEITEN: Bier ----------
+    def open_edit_beer_dialog(idx: int):
+        with lock:
+            if idx < 0 or idx >= len(pot.history):
+                ui.notify('Ungültige Auswahl.', type='negative'); return
+            t = pot.history[idx]
+        if t.kind != Kind.BEER:
+            ui.notify('Nur Bierkäufe können hier bearbeitet werden.', type='warning'); return
+
+        with ui.dialog() as dialog, ui.card().classes('min-w-[360px]'):
+            ui.label('✏️ Bier-Eintrag bearbeiten').classes('text-lg font-semibold')
+
+            payer_in = ui.select(['Sven', 'Sevi'], value=(t.payer or 'Sven'), label='Zahler').classes('w-full')
+
+            amount_in = ui.input('Betrag (CHF)').classes('w-full mt-2')
+            amount_in.value = f"{q(-t.delta if t.delta < 0 else Decimal('0.00')):.2f}"
+
+            comment_in = ui.input('Kommentar').classes('w-full mt-2')
+            comment_in.value = t.comment
+
+            def apply_change():
+                try:
+                    raw = (amount_in.value or '').strip()
+                    if not raw:
+                        ui.notify('Bitte Betrag eingeben.', type='negative'); return
+                    amt = q(Decimal(raw.replace(',', '.')))
+                    if amt <= 0:
+                        ui.notify('Betrag muss > 0 sein.', type='negative'); return
+                    with lock:
+                        t.payer = payer_in.value or 'Sven'
+                        t.comment = (comment_in.value or '').strip()
+                        t.delta = -amt
+                        pot.recalc_balance()
+                        save_state()
+                    ui.notify('Bier-Eintrag aktualisiert.', type='positive')
+                    refresh_top(); refresh_table()
+                    dialog.close()
+                except Exception:
+                    ui.notify('Ungültiger Betrag.', type='negative')
+
+            amount_in.on('keydown.enter', lambda e: apply_change())
+            comment_in.on('keydown.enter', lambda e: apply_change())
+
+            with ui.row().classes('justify-end gap-2 mt-3'):
+                ui.button('Abbrechen', on_click=dialog.close)
+                ui.button('Speichern', on_click=apply_change, color='primary')
+
+        dialog.open()
+
+    # ---------- BEARBEITEN: Transfer ----------
+    def open_edit_transfer_dialog(idx: int):
+        with lock:
+            if idx < 0 or idx >= len(pot.history):
+                ui.notify('Ungültige Auswahl.', type='negative'); return
+            t = pot.history[idx]
+        if t.kind != Kind.TRANSFER:
+            ui.notify('Nur Transfers können hier bearbeitet werden.', type='warning'); return
+
+        with ui.dialog() as dialog, ui.card().classes('min-w-[360px]'):
+            ui.label('✏️ Transfer bearbeiten').classes('text-lg font-semibold')
+
+            payer_in = ui.select(['Sven', 'Sevi'], value=(t.payer or 'Sven'), label='Zahler').classes('w-full')
+            receiver_label = ui.label().classes('mt-1')
+            amount_in = ui.input('Betrag (CHF)').classes('w-full')
+            amount_in.value = f"{q(t.transfer_amount):.2f}"
+            comment_in = ui.input('Kommentar').classes('w-full mt-2')
+            comment_in.value = t.comment
+            info_line = ui.label().style('opacity:0.8')
+
+            def update_info():
+                pay = payer_in.value or 'Sven'
+                rec = 'Sevi' if pay == 'Sven' else 'Sven'
+                receiver_label.text = f'Empfänger: {rec}'
+                # Verfügbarkeit berechnen, aktuellen Transfer temporär zurückrechnen
+                with lock:
+                    sven_total, sevi_total = pot.person_totals()
+                    if t.payer == "Sven":
+                        sven_total += t.transfer_amount
+                        sevi_total -= t.transfer_amount
+                    elif t.payer == "Sevi":
+                        sevi_total += t.transfer_amount
+                        sven_total -= t.transfer_amount
+                avail = sven_total if pay == 'Sven' else sevi_total
+                info_line.text = f'Verfügbar für {pay}: {chf(avail)}'
+                return rec, avail
+
+            payer_in.on('update:model-value', lambda e: update_info())
+            update_info()
+
+            def apply_change():
+                try:
+                    raw = (amount_in.value or '').strip()
+                    if not raw:
+                        ui.notify('Bitte Betrag eingeben.', type='negative'); return
+                    amt = q(Decimal(raw.replace(',', '.')))
+                    if amt <= 0:
+                        ui.notify('Betrag muss > 0 sein.', type='negative'); return
+                    receiver, avail = update_info()
+                    if amt > avail:
+                        ui.notify(f'{payer_in.value} hat nur {chf(avail)} verfügbar.', type='negative'); return
+                    with lock:
+                        t.payer = payer_in.value or 'Sven'
+                        t.receiver = receiver
+                        t.transfer_amount = amt
+                        t.comment = (comment_in.value or '').strip()
+                        # Pot-Saldo bleibt unverändert
+                        save_state()
+                    ui.notify('Transfer aktualisiert.', type='positive')
+                    refresh_top(); refresh_table()
+                    dialog.close()
+                except Exception:
+                    ui.notify('Ungültiger Betrag.', type='negative')
+
+            amount_in.on('keydown.enter', lambda e: apply_change())
+            comment_in.on('keydown.enter', lambda e: apply_change())
+
+            with ui.row().classes('justify-end gap-2 mt-3'):
+                ui.button('Abbrechen', on_click=dialog.close)
+                ui.button('Speichern', on_click=apply_change, color='primary')
+
+        dialog.open()
+
+    # ---------- WEITERE DIALOGE (neu anlegen) ----------
     def dlg_neue_wette():
         with ui.dialog() as dialog, ui.card().classes('min-w-[360px]'):
             ui.label('🎲 Neue Wette').classes('text-lg font-semibold')
@@ -544,7 +664,6 @@ def build_ui():
     def dlg_bier_bezahlen():
         with ui.dialog() as dialog, ui.card().classes('min-w-[360px]'):
             ui.label('🍺 Bier bezahlen').classes('text-lg font-semibold')
-        #   Payer/Amount/Comment
             payer = ui.select(['Sven', 'Sevi'], value='Sven', label='Zahler').classes('w-full')
             amount = ui.input('Betrag (CHF)').classes('w-full')
             comment = ui.input('Kommentar (optional)').classes('w-full')
@@ -565,7 +684,6 @@ def build_ui():
                     dialog.close()
                 except Exception:
                     ui.notify('Ungültiger Betrag.', type='negative')
-
             amount.on('keydown.enter', lambda e: submit())
             with ui.row().classes('justify-end gap-2 mt-3'):
                 ui.button('Abbrechen', on_click=dialog.close)
@@ -598,29 +716,13 @@ def build_ui():
                 ui.button('Buchen', on_click=do_book, color='primary')
         dialog.open()
 
-    def do_reset():
-        with ui.dialog() as dialog, ui.card():
-            ui.label('🧹 Verlauf & Saldo löschen').classes('text-lg font-semibold')
-            ui.label('Wirklich Verlauf & Saldo komplett löschen?')
-            def yes():
-                with lock:
-                    pot.reset()
-                    save_state()
-                refresh_top(); refresh_table()
-                ui.notify('Verlauf und Saldo wurden gelöscht.', type='positive')
-                dialog.close()
-            with ui.row().classes('justify-end gap-2 mt-3'):
-                ui.button('Abbrechen', on_click=dialog.close)
-                ui.button('Löschen', on_click=yes, color='negative')
-        dialog.open()
-
     # ---------- FUNKTIONS-BUTTONS (MOBILE-FIRST, VOR VERLAUF) ----------
     with ui.column().classes('gap-2 px-3 pt-2 max-w-screen-sm mx-auto'):
         ui.button('🎲 Neue Wette', on_click=dlg_neue_wette).classes('w-full py-3 rounded-xl shadow-sm')
         ui.button('🍺 Bier bezahlen', on_click=dlg_bier_bezahlen).classes('w-full py-3 rounded-xl shadow-sm')
         ui.button('🔁 Geld transferieren', on_click=open_transfer_dialog).classes('w-full py-3 rounded-xl shadow-sm')
         ui.button('🤝 Ausgleich vorschlagen', on_click=dlg_ausgleich).classes('w-full py-3 rounded-xl shadow-sm')
-        ui.button('🧹 Verlauf & Saldo löschen', on_click=do_reset).props('color=negative').classes('w-full py-3 rounded-xl shadow-sm')
+        ui.button('🧹 Verlauf & Saldo löschen', on_click=lambda: do_reset()).props('color=negative').classes('w-full py-3 rounded-xl shadow-sm')
 
     # ---------- VERLAUF (BREIT) ----------
     table_rows: list[dict] = []
@@ -659,16 +761,25 @@ def build_ui():
     with ui.card().classes('m-3 w-full max-w-screen-2xl mx-auto'):
         ui.label('📜 Verlauf').style(f'color:{TEXT}; font-weight:600')
 
-        # Bearbeiten-Button (arbeitet mit Tabellenauswahl)
+        # Bearbeiten-Button, entscheidet je Typ
         def edit_selected():
             sel = table.selected
             if not sel:
                 ui.notify('Bitte zuerst eine Zeile auswählen.', type='warning'); return
             row = sel[0]
             idx = int(row['id'])
-            open_edit_bet_dialog(idx)
+            with lock:
+                t = pot.history[idx]
+            if t.kind == Kind.BET:
+                open_edit_bet_dialog(idx)
+            elif t.kind == Kind.BEER:
+                open_edit_beer_dialog(idx)
+            elif t.kind == Kind.TRANSFER:
+                open_edit_transfer_dialog(idx)
+            else:
+                ui.notify('Unbekannter Typ.', type='warning')
 
-        ui.button('✏️ Wette bearbeiten (Auswahl)', on_click=edit_selected).classes('mb-2')
+        ui.button('✏️ Eintrag bearbeiten (Auswahl)', on_click=edit_selected).classes('mb-2')
 
         with ui.scroll_area().style('max-height: 75vh'):
             table = ui.table(
