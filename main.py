@@ -270,7 +270,7 @@ def build_ui():
             if APP_PASSWORD:
                 def do_logout():
                     app.storage.user.pop('auth_ok', None)
-                    ui.open('/login')
+                    ui.navigate.to('/login')
                 ui.button('Logout', on_click=do_logout).props('flat')
 
     # Personensalden
@@ -467,6 +467,22 @@ def build_ui():
         ui.button('🍺 Bier bezahlen', on_click=dlg_bier_bezahlen)
         ui.button('🔁 Geld transferieren', on_click=dlg_transfer)
         ui.button('🤝 Ausgleich vorschlagen', on_click=dlg_ausgleich)
+        # Reset-Dialog-Funktion (vergessen oben zu definieren)
+        def do_reset():
+            with ui.dialog() as dialog, ui.card():
+                ui.label('🧹 Verlauf & Saldo löschen').classes('text-lg font-semibold')
+                ui.label('Wirklich Verlauf & Saldo komplett löschen?')
+                def yes():
+                    with lock:
+                        pot.reset()
+                        save_state()
+                    refresh_top(); refresh_table()
+                    ui.notify('Verlauf und Saldo wurden gelöscht.', type='positive')
+                    dialog.close()
+                with ui.row().classes('justify-end gap-2 mt-3'):
+                    ui.button('Abbrechen', on_click=dialog.close)
+                    ui.button('Löschen', on_click=yes, color='negative')
+            dialog.open()
         ui.button('🧹 Verlauf & Saldo löschen', on_click=do_reset).props('color=negative')
 
     # Footer
@@ -489,7 +505,7 @@ def is_authed() -> bool:
 # Root-Route: sofort weiterleiten auf /app
 @ui.page('/')
 def index():
-    ui.timer(0.01, lambda: ui.open('/app'), once=True)
+    ui.timer(0.01, lambda: ui.navigate.to('/app'), once=True)
     ui.label('Lade …')
 
 
@@ -497,7 +513,7 @@ def index():
 @ui.page('/login')
 def login_page():
     if is_authed():
-        ui.timer(0.01, lambda: ui.open('/app'), once=True)
+        ui.timer(0.01, lambda: ui.navigate.to('/app'), once=True)
         ui.label('Schon eingeloggt, weiterleiten …')
         return
 
@@ -507,13 +523,12 @@ def login_page():
 
         def do_login():
             if not APP_PASSWORD:
-                # Falls kein Passwort konfiguriert ist, direkt durchlassen
                 app.storage.user['auth_ok'] = True
-                ui.open('/app')
+                ui.navigate.to('/app')
                 return
             if (pwd.value or "") == APP_PASSWORD:
                 app.storage.user['auth_ok'] = True
-                ui.open('/app')
+                ui.navigate.to('/app')
             else:
                 ui.notify('Falsches Passwort', type='negative')
 
@@ -524,7 +539,7 @@ def login_page():
 @ui.page('/app')
 def app_page():
     if not is_authed():
-        ui.timer(0.01, lambda: ui.open('/login'), once=True)
+        ui.timer(0.01, lambda: ui.navigate.to('/login'), once=True)
         ui.label('Bitte einloggen …')
         return
     build_ui()
@@ -539,5 +554,5 @@ ui.run(
     host='0.0.0.0',
     port=int(os.getenv('PORT', '8080')),
     reload=False,
-    storage_secret=STORAGE_SECRET,  # <<<< wichtig!
+    storage_secret=STORAGE_SECRET,
 )
