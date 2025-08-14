@@ -289,11 +289,11 @@ def build_ui():
             sven_label.text = f'Sven: {sven:.2f} CHF'
             sevi_label.text = f'Sevi: {sevi:.2f} CHF'
 
-    # Placeholder; wird nach Tabelle belegt, damit wir ihn hier schon nutzen können
+    # Platzhalter; wird nach Tabelle belegt
     def _noop(): ...
-    refresh_table = _noop  # wird unten überschrieben
+    refresh_table = _noop
 
-    # ---------- TRANSFER-DIALOG (vorab gebaut, damit Öffnen 100% klappt) ----------
+    # ---------- TRANSFER-DIALOG (vorab gebaut) ----------
     transfer_dialog = ui.dialog()
 
     with transfer_dialog, ui.card().classes('min-w-[360px]'):
@@ -313,7 +313,8 @@ def build_ui():
             tr_info.text = f'Verfügbar für {pay}: {chf(avail)}'
             return rec, avail
 
-        tr_payer.on('update:model-value')(lambda _: tr_update_info())
+        # FIX: korrekt binden (zweites Argument), NICHT .on(...)(...)
+        tr_payer.on('update:model-value', lambda e: tr_update_info())
         tr_update_info()
 
         def tr_submit():
@@ -324,7 +325,7 @@ def build_ui():
                 amt = q(Decimal(raw.replace(",", ".")))
                 if amt <= 0:
                     ui.notify('Betrag muss > 0 sein.', type='negative'); return
-                receiver, avail = tr_update_info()
+                receiver, _ = tr_update_info()
                 payer = tr_payer.value or 'Sven'
                 with lock:
                     res = pot.transfer(amt, payer, receiver)
@@ -344,12 +345,11 @@ def build_ui():
             ui.button('OK', on_click=tr_submit, color='primary')
 
     def open_transfer_dialog():
-        # Eingabefeld leeren, Info aktualisieren, Dialog öffnen
         tr_amount.value = ''
         tr_update_info()
         transfer_dialog.open()
 
-    # ---------- WEITERE DIALOGE (on demand) ----------
+    # ---------- WEITERE DIALOGE ----------
     def dlg_neue_wette():
         with ui.dialog() as dialog, ui.card().classes('min-w-[360px]'):
             ui.label('🎲 Neue Wette').classes('text-lg font-semibold')
@@ -518,7 +518,7 @@ def build_ui():
             else:
                 last_reset_label.text = "Zuletzt zurückgesetzt: " + pot.last_reset.astimezone(CH_TZ).strftime("%d.%m.%Y %H:%M")
 
-    # jetzt den Platzhalter überschreiben
+    # Platzhalter überschreiben
     refresh_table = _refresh_table_impl
 
     # Initial refresh
@@ -560,7 +560,6 @@ def login_page():
             else:
                 ui.notify('Falsches Passwort', type='negative')
 
-        # Enter-Handling für das Passwortfeld
         pwd.on('keydown.enter', lambda e: do_login())
         ui.button('Login', on_click=do_login, color='primary').classes('mt-3')
 
