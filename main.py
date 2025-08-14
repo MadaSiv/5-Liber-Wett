@@ -346,25 +346,27 @@ def ts_fmt(dt: datetime) -> str:
 def build_ui():
     """Haupt-App (nur für eingeloggte Nutzer)."""
 
-    # Header (fixiert): alles EINZEILIG, damit nichts abgeschnitten wird
-    with ui.header().classes('items-center justify-between bg-white'):
-        ui.label('🍺 5-Franken-Wette').style(f'color:{TEXT}; font-weight:700; font-size:20px')
-        with ui.row().classes('items-center gap-3 whitespace-nowrap'):
-            balance_label = ui.label().style('font-size:14px')
-            sven_label = ui.label().style('font-size:14px; opacity:0.85')
-            sevi_label = ui.label().style('font-size:14px; opacity:0.85')
-            if APP_PASSWORD:
-                def do_logout():
-                    app.storage.user.pop('auth_ok', None)
-                    ui.navigate.to('/login')
-                ui.button('Logout', on_click=do_logout).props('flat size=sm')
+    # --- Logout-Handler (wird unten verwendet) ---
+    def do_logout():
+        app.storage.user.pop('auth_ok', None)
+        ui.navigate.to('/login')
+
+    # ---------- HEADER (fixiert, 2-zeilig): Titel oben; darunter Saldenzeile ----------
+    with ui.header().classes('bg-white px-3 py-2 min-h-[84px]'):
+        with ui.column().classes('w-full'):
+            ui.label('🍺 5-Franken-Wette').style(f'color:{TEXT}; font-weight:700; font-size:20px')
+            with ui.row().classes('w-full items-center justify-between'):
+                balance_label = ui.label().style('font-size:16px; font-weight:600')
+                with ui.row().classes('items-center gap-4'):
+                    sven_label = ui.label().style('font-size:14px; opacity:0.9')
+                    sevi_label = ui.label().style('font-size:14px; opacity:0.9')
 
     # --- Refresh-Funktionen ---
     def refresh_top():
         with lock:
             pot.recalc_balance()
             sven, sevi = pot.person_totals()
-            balance_label.text = f'Saldo: {chf(pot.balance)}'
+            balance_label.text = f'Aktueller Saldo: {chf(pot.balance)}'
             sven_label.text = f'Sven: {sven:.2f} CHF'
             sevi_label.text = f'Sevi: {sevi:.2f} CHF'
 
@@ -819,8 +821,8 @@ def build_ui():
                         ui.button('Löschen', on_click=confirm_delete, color='negative')
                 dialog.open()
 
-            ui.button('✏️ Eintrag bearbeiten', on_click=edit_selected)
-            ui.button('🗑️ Eintrag löschen', on_click=delete_selected).props('color=negative')
+            ui.button('✏️ Eintrag bearbeiten (Auswahl)', on_click=edit_selected)
+            ui.button('🗑️ Eintrag löschen (Auswahl)', on_click=delete_selected).props('color=negative')
 
         with ui.scroll_area().style('max-height: 75vh'):
             table = ui.table(
@@ -830,6 +832,11 @@ def build_ui():
             ).props('flat bordered dense sticky-header wrap-cells selection="single"')
 
         last_reset_label = ui.label().style('opacity:0.7; display:block; margin-top:6px')
+
+    # ---------- Logout unten rechts (nach Verlauf) ----------
+    if APP_PASSWORD:
+        with ui.row().classes('justify-end m-3'):
+            ui.button('Logout', on_click=do_logout).props('flat')
 
     def _refresh_table_impl():
         rebuild_rows()
