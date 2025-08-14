@@ -351,15 +351,18 @@ def build_ui():
         app.storage.user.pop('auth_ok', None)
         ui.navigate.to('/login')
 
-    # ---------- HEADER (fixiert, 2-zeilig): Titel oben; darunter Saldenzeile ----------
-    with ui.header().classes('bg-white px-3 py-2 min-h-[84px]'):
-        with ui.column().classes('w-full'):
-            ui.label('🍺 5-Franken-Wette').style(f'color:{TEXT}; font-weight:700; font-size:20px')
-            with ui.row().classes('w-full items-center justify-between'):
-                balance_label = ui.label().style('font-size:16px; font-weight:600')
-                with ui.row().classes('items-center gap-4'):
-                    sven_label = ui.label().style('font-size:14px; opacity:0.9')
-                    sevi_label = ui.label().style('font-size:14px; opacity:0.9')
+    # ---------- HEADER: nur Titel ----------
+    with ui.header().classes('bg-white px-3 py-2'):
+        ui.label('🍺 5-Franken-Wette').style(f'color:{TEXT}; font-weight:700; font-size:20px')
+
+    # ---------- STICKY BALANCE-BAR: bleibt beim Scrollen sichtbar ----------
+    with ui.row().classes('w-full items-center justify-between px-3 py-2 bg-white shadow-sm').style(
+        'position: sticky; top: var(--q-header-height); z-index: 1000;'
+    ):
+        balance_label = ui.label().style(f'color:{TEXT}; font-size:16px; font-weight:600')
+        with ui.row().classes('items-center gap-4'):
+            sven_label = ui.label().style(f'color:{TEXT}; font-size:14px; opacity:0.95')
+            sevi_label = ui.label().style(f'color:{TEXT}; font-size:14px; opacity:0.95')
 
     # --- Refresh-Funktionen ---
     def refresh_top():
@@ -821,8 +824,8 @@ def build_ui():
                         ui.button('Löschen', on_click=confirm_delete, color='negative')
                 dialog.open()
 
-            ui.button('✏️ Eintrag bearbeiten (Auswahl)', on_click=edit_selected)
-            ui.button('🗑️ Eintrag löschen (Auswahl)', on_click=delete_selected).props('color=negative')
+            ui.button('✏️ Eintrag bearbeiten', on_click=edit_selected)
+            ui.button('🗑️ Eintrag löschen', on_click=delete_selected).props('color=negative')
 
         with ui.scroll_area().style('max-height: 75vh'):
             table = ui.table(
