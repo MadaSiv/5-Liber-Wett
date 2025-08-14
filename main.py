@@ -25,7 +25,7 @@ CENT = Decimal("0.01")
 # Passwortschutz (optional)
 APP_PASSWORD = os.getenv("APP_PASSWORD")  # wenn None/"" → kein Login nötig
 
-# Speicherort (ohne Render-Disk: im Projektordner)
+# Speicherort (JSON-Fallback)
 APP_DIR = Path(os.getenv("APP_DIR", str(Path.cwd() / "data")))
 DEFAULT_PATH = APP_DIR / "wette_pot.json"
 APP_DIR.mkdir(parents=True, exist_ok=True)
@@ -222,7 +222,10 @@ class Pot:
                     sevi += amt
         return q(sven), q(sevi)
 
-# ========== DB (optional, via DATABASE_URL) ==========
+
+# ==========
+#   DB (optional, via DATABASE_URL)
+# ==========
 DATABASE_URL = os.getenv("DATABASE_URL")
 USE_DB = bool(DATABASE_URL)
 if USE_DB:
@@ -253,9 +256,8 @@ if USE_DB:
     def db_init():
         Base.metadata.create_all(engine)
 
-    def db_load_state(pot_obj):
+    def db_load_state(pot_obj: Pot):
         with SessionLocal() as s:
-            # history laden
             rows = s.query(TransactionRow).order_by(TransactionRow.timestamp.asc(), TransactionRow.id.asc()).all()
             pot_obj.history.clear()
             for r in rows:
@@ -269,13 +271,11 @@ if USE_DB:
                     receiver=r.receiver or "",
                     transfer_amount=Decimal(r.transfer_amount or 0).quantize(CENT),
                 ))
-            # last_reset laden
             m = s.get(MetaRow, 1)
             pot_obj.last_reset = m.last_reset if m else None
             pot_obj.recalc_balance()
 
-    def db_save_state_full(pot_obj):
-        # einfache, robuste Strategie: Tabelle neu schreiben
+    def db_save_state_full(pot_obj: Pot):
         with SessionLocal() as s:
             s.query(TransactionRow).delete()
             for t in pot_obj.history:
@@ -296,8 +296,9 @@ if USE_DB:
             m.last_reset = pot_obj.last_reset
             s.commit()
 
+
 # ==========
-#   State
+#   State & Persistenz
 # ==========
 lock = threading.Lock()
 pot = Pot()
@@ -313,6 +314,7 @@ def load_state() -> None:
         with open(DEFAULT_PATH, "r", encoding="utf-8") as f:
             pot.from_data(json.load(f))
         pot.recalc_balance()
+
 
 def save_state() -> None:
     if USE_DB:
@@ -394,7 +396,6 @@ def build_ui():
             tr_info.text = f'Verfügbar für {pay}: {chf(avail)}'
             return rec, avail
 
-        # FIX: korrekt binden (zweites Argument), NICHT .on(...)(...)
         tr_payer.on('update:model-value', lambda e: tr_update_info())
         tr_update_info()
 
@@ -429,6 +430,78 @@ def build_ui():
         tr_amount.value = ''
         tr_update_info()
         transfer_dialog.open()
+
+    # ---------- WETTE BEARBEITEN (Dialog) ----------
+    def open_edit_bet_dialog(idx: int):
+        # Schutz: Index prüfen
+        with lock:
+            if idx < 0 or idx >= len(pot.history):
+                ui.notify('Ungültige Auswahl.', type='negative'); return
+            t = pot.history[idx]
+        if t.kind != Kind.BET:
+            ui.notify('Nur Wetten können bearbeitet werden.', type='warning'); return
+
+        # Stake aus aktuellem Eintrag ableiten
+        def infer_stake() -> Decimal:
+            losers = 0
+            if "Sven verliert" in t.losers:
+                losers += 1
+            if "Sevi verliert" in t.losers:
+                losers += 1
+            if losers > 0 and t.delta > 0:
+                return q(t.delta / losers)
+            return STAKE
+
+        with ui.dialog() as dialog, ui.card().classes('min-w-[360px]'):
+            ui.label('✏️ Wette bearbeiten').classes('text-lg font-semibold')
+
+            var_sven = ui.checkbox('Sven verliert', value=("Sven verliert" in t.losers))
+            var_sevi = ui.checkbox('Sevi verliert', value=("Sevi verliert" in t.losers))
+
+            stake_in = ui.input('Einsatz je Verlierer (CHF)').classes('mt-2')
+            stake_in.value = f"{infer_stake():.2f}"
+
+            comment_in = ui.input('Kommentar').classes('mt-2')
+            comment_in.value = t.comment
+
+            def apply_change():
+                try:
+                    new_losers = []
+                    if var_sven.value:
+                        new_losers.append("Sven verliert")
+                    if var_sevi.value:
+                        new_losers.append("Sevi verliert")
+                    n = len(new_losers)
+                    if n > 0:
+                        raw = (stake_in.value or "").strip()
+                        if not raw:
+                            ui.notify('Bitte Einsatz eingeben.', type='negative'); return
+                        new_stake = q(Decimal(raw.replace(",", ".")))
+                        if new_stake <= 0:
+                            ui.notify('Einsatz muss > 0 sein.', type='negative'); return
+                        deposit = q(new_stake * Decimal(n))
+                    else:
+                        deposit = Decimal("0.00")
+                    with lock:
+                        t.losers = ", ".join(new_losers) if new_losers else "beide richtig"
+                        t.comment = (comment_in.value or "").strip()
+                        t.delta = deposit
+                        pot.recalc_balance()
+                        save_state()
+                    ui.notify('Wette aktualisiert.', type='positive')
+                    refresh_top(); refresh_table()
+                    dialog.close()
+                except Exception:
+                    ui.notify('Ungültige Eingabe.', type='negative')
+
+            stake_in.on('keydown.enter', lambda e: apply_change())
+            comment_in.on('keydown.enter', lambda e: apply_change())
+
+            with ui.row().classes('justify-end gap-2 mt-3'):
+                ui.button('Abbrechen', on_click=dialog.close)
+                ui.button('Speichern', on_click=apply_change, color='primary')
+
+        dialog.open()
 
     # ---------- WEITERE DIALOGE ----------
     def dlg_neue_wette():
@@ -471,6 +544,7 @@ def build_ui():
     def dlg_bier_bezahlen():
         with ui.dialog() as dialog, ui.card().classes('min-w-[360px]'):
             ui.label('🍺 Bier bezahlen').classes('text-lg font-semibold')
+        #   Payer/Amount/Comment
             payer = ui.select(['Sven', 'Sevi'], value='Sven', label='Zahler').classes('w-full')
             amount = ui.input('Betrag (CHF)').classes('w-full')
             comment = ui.input('Kommentar (optional)').classes('w-full')
@@ -491,6 +565,7 @@ def build_ui():
                     dialog.close()
                 except Exception:
                     ui.notify('Ungültiger Betrag.', type='negative')
+
             amount.on('keydown.enter', lambda e: submit())
             with ui.row().classes('justify-end gap-2 mt-3'):
                 ui.button('Abbrechen', on_click=dialog.close)
@@ -553,7 +628,7 @@ def build_ui():
     def rebuild_rows() -> None:
         table_rows.clear()
         with lock:
-            for t in pot.history:
+            for idx, t in enumerate(pot.history):
                 if t.kind == Kind.TRANSFER:
                     betrag_display = f"{q(t.transfer_amount):.2f}"
                 else:
@@ -565,6 +640,7 @@ def build_ui():
                 else:
                     main = f"Ausgleich → {t.payer} → {t.receiver}."
                 table_rows.append({
+                    'id': idx,  # für Auswahl/Bearbeiten
                     'Zeit': ts_fmt(t.timestamp),
                     'Typ': TYPE_LABELS.get(t.kind, t.kind.value),
                     'Betrag': betrag_display,
@@ -582,12 +658,25 @@ def build_ui():
 
     with ui.card().classes('m-3 w-full max-w-screen-2xl mx-auto'):
         ui.label('📜 Verlauf').style(f'color:{TEXT}; font-weight:600')
+
+        # Bearbeiten-Button (arbeitet mit Tabellenauswahl)
+        def edit_selected():
+            sel = table.selected
+            if not sel:
+                ui.notify('Bitte zuerst eine Zeile auswählen.', type='warning'); return
+            row = sel[0]
+            idx = int(row['id'])
+            open_edit_bet_dialog(idx)
+
+        ui.button('✏️ Wette bearbeiten (Auswahl)', on_click=edit_selected).classes('mb-2')
+
         with ui.scroll_area().style('max-height: 75vh'):
             table = ui.table(
                 columns=columns,
                 rows=table_rows,
-                row_key='Zeit',
-            ).props('flat bordered dense sticky-header wrap-cells')
+                row_key='id',
+            ).props('flat bordered dense sticky-header wrap-cells selection="single"')
+
         last_reset_label = ui.label().style('opacity:0.7; display:block; margin-top:6px')
 
     def _refresh_table_impl():
@@ -666,4 +755,3 @@ ui.run(
     reload=False,
     storage_secret=STORAGE_SECRET,
 )
-
