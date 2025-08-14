@@ -346,27 +346,25 @@ def ts_fmt(dt: datetime) -> str:
 def build_ui():
     """Haupt-App (nur für eingeloggte Nutzer)."""
 
-    # Header (fixiert): Titel links; rechts eine Spalte mit Gesamtsaldo + Personensalden
+    # Header (fixiert): alles EINZEILIG, damit nichts abgeschnitten wird
     with ui.header().classes('items-center justify-between bg-white'):
         ui.label('🍺 5-Franken-Wette').style(f'color:{TEXT}; font-weight:700; font-size:20px')
-        with ui.column().classes('items-end gap-0'):
-            balance_label = ui.label().style(f'color:{TEXT}; font-size:16px')
-            with ui.row().classes('items-center gap-3'):
-                sven_label = ui.label().style('opacity:0.8')
-                sevi_label = ui.label().style('opacity:0.8')
-            # optional Logout-Button unter die Salden
+        with ui.row().classes('items-center gap-3 whitespace-nowrap'):
+            balance_label = ui.label().style('font-size:14px')
+            sven_label = ui.label().style('font-size:14px; opacity:0.85')
+            sevi_label = ui.label().style('font-size:14px; opacity:0.85')
             if APP_PASSWORD:
                 def do_logout():
                     app.storage.user.pop('auth_ok', None)
                     ui.navigate.to('/login')
-                ui.button('Logout', on_click=do_logout).props('flat size=sm').classes('mt-1')
+                ui.button('Logout', on_click=do_logout).props('flat size=sm')
 
     # --- Refresh-Funktionen ---
     def refresh_top():
         with lock:
             pot.recalc_balance()
             sven, sevi = pot.person_totals()
-            balance_label.text = f'Aktueller Saldo: {chf(pot.balance)}'
+            balance_label.text = f'Saldo: {chf(pot.balance)}'
             sven_label.text = f'Sven: {sven:.2f} CHF'
             sevi_label.text = f'Sevi: {sevi:.2f} CHF'
 
@@ -821,8 +819,8 @@ def build_ui():
                         ui.button('Löschen', on_click=confirm_delete, color='negative')
                 dialog.open()
 
-            ui.button('✏️ Eintrag bearbeiten (Auswahl)', on_click=edit_selected)
-            ui.button('🗑️ Eintrag löschen (Auswahl)', on_click=delete_selected).props('color=negative')
+            ui.button('✏️ Eintrag bearbeiten', on_click=edit_selected)
+            ui.button('🗑️ Eintrag löschen', on_click=delete_selected).props('color=negative')
 
         with ui.scroll_area().style('max-height: 75vh'):
             table = ui.table(
