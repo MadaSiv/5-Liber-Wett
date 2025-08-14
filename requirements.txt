@@ -1,2 +1,4 @@
 nicegui>=1.4.21
 tzdata
+SQLAlchemy>=2.0
+psycopg[binary]>=3.1
