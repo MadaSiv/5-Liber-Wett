@@ -912,10 +912,10 @@ def build_ui():
                 with ui.row().classes('justify-end gap-2 mt-3'):
                     ui.button('Abbrechen', on_click=import_dialog.close)
 
-            ui.button('✏️ Eintrag bearbeiten (Auswahl)', on_click=edit_selected)
-            ui.button('🗑️ Eintrag löschen (Auswahl)', on_click=delete_selected).props('color=negative')
-            ui.button('⬇️ Verlauf exportieren (CSV)', on_click=export_csv)
-            ui.button('⬆️ Verlauf importieren (CSV)', on_click=import_dialog.open)
+            ui.button('✏️ Eintrag bearbeiten', on_click=edit_selected)
+            ui.button('🗑️ Eintrag löschen', on_click=delete_selected).props('color=negative')
+            ui.button('⬇️ Verlauf exportieren', on_click=export_csv)
+            ui.button('⬆️ Verlauf importieren', on_click=import_dialog.open)
 
         with ui.scroll_area().style('max-height: 75vh'):
             table = ui.table(columns=columns, rows=table_rows, row_key='id').props(
@@ -926,7 +926,7 @@ def build_ui():
     # ---------- Logout unten rechts ----------
     if APP_PASSWORD:
         with ui.row().classes('justify-end m-3'):
-            ui.button('Logout', on_click=do_logout).props('flat')
+            ui.button('Tschüüüs', on_click=do_logout).props('flat')
 
     def _refresh_table_impl():
         rebuild_rows(); table.update()
@@ -957,7 +957,7 @@ def login_page():
         ui.label('Schon eingeloggt, weiterleiten …'); return
 
     with ui.card().classes('max-w-sm mx-auto mt-24'):
-        ui.label('🔒 Login').classes('text-lg font-semibold')
+        ui.label('🔒 Morgää').classes('text-lg font-semibold')
         pwd = ui.input('Passwort', password=True, password_toggle_button=True).classes('mt-2')
 
         def do_login():
