@@ -259,7 +259,7 @@ def ts_fmt(dt: datetime) -> str:
 
 
 def build_ui():
-    """Baut die komplette App-UI – wird nur nach erfolgreichem Login aufgerufen."""
+    """Haupt-App (nur für eingeloggte Nutzer)."""
 
     # Header
     with ui.header().classes('items-center justify-between bg-white'):
@@ -270,7 +270,7 @@ def build_ui():
             if APP_PASSWORD:
                 def do_logout():
                     app.storage.user.pop('auth_ok', None)
-                    ui.open('/')
+                    ui.open('/login')
                 ui.button('Logout', on_click=do_logout).props('flat')
 
     # Personensalden
@@ -461,22 +461,6 @@ def build_ui():
                 ui.button('Buchen', on_click=do_book, color='primary')
         dialog.open()
 
-    def do_reset():
-        with ui.dialog() as dialog, ui.card():
-            ui.label('🧹 Verlauf & Saldo löschen').classes('text-lg font-semibold')
-            ui.label('Wirklich Verlauf & Saldo komplett löschen?')
-            def yes():
-                with lock:
-                    pot.reset()
-                    save_state()
-                refresh_top(); refresh_table()
-                ui.notify('Verlauf und Saldo wurden gelöscht.', type='positive')
-                dialog.close()
-            with ui.row().classes('justify-end gap-2 mt-3'):
-                ui.button('Abbrechen', on_click=dialog.close)
-                ui.button('Löschen', on_click=yes, color='negative')
-        dialog.open()
-
     # Aktions-Buttons
     with ui.row().classes('gap-2 px-4'):
         ui.button('🎲 Neue Wette', on_click=dlg_neue_wette)
@@ -497,23 +481,52 @@ def build_ui():
     initial_refresh()
 
 
+def is_authed() -> bool:
+    """Login-Bedingung: kein Passwort nötig ODER Session-Flag gesetzt."""
+    return not APP_PASSWORD or app.storage.user.get('auth_ok') is True
+
+
+# Root-Route: sofort weiterleiten auf /app
 @ui.page('/')
 def index():
-    # Wenn Passwort gesetzt und (noch) nicht angemeldet → Login-Card
-    if APP_PASSWORD and not app.storage.user.get('auth_ok'):
-        with ui.card().classes('max-w-sm mx-auto mt-24'):
-            ui.label('🔒 Login').classes('text-lg font-semibold')
-            pwd = ui.input('Passwort', password=True, password_toggle_button=True).classes('mt-2')
-            def do_login():
-                if (pwd.value or "") == APP_PASSWORD:
-                    app.storage.user['auth_ok'] = True
-                    ui.open('/')  # Seite neu laden
-                else:
-                    ui.notify('Falsches Passwort', type='negative')
-            ui.button('Login', on_click=do_login, color='primary').classes('mt-3')
+    ui.timer(0.01, lambda: ui.open('/app'), once=True)
+    ui.label('Lade …')
+
+
+# Login-Seite
+@ui.page('/login')
+def login_page():
+    if is_authed():
+        ui.timer(0.01, lambda: ui.open('/app'), once=True)
+        ui.label('Schon eingeloggt, weiterleiten …')
         return
 
-    # Andernfalls: App aufbauen
+    with ui.card().classes('max-w-sm mx-auto mt-24'):
+        ui.label('🔒 Login').classes('text-lg font-semibold')
+        pwd = ui.input('Passwort', password=True, password_toggle_button=True).classes('mt-2')
+
+        def do_login():
+            if not APP_PASSWORD:
+                # Falls kein Passwort konfiguriert ist, direkt durchlassen
+                app.storage.user['auth_ok'] = True
+                ui.open('/app')
+                return
+            if (pwd.value or "") == APP_PASSWORD:
+                app.storage.user['auth_ok'] = True
+                ui.open('/app')
+            else:
+                ui.notify('Falsches Passwort', type='negative')
+
+        ui.button('Login', on_click=do_login, color='primary').classes('mt-3')
+
+
+# App-Seite (schützt sich selbst)
+@ui.page('/app')
+def app_page():
+    if not is_authed():
+        ui.timer(0.01, lambda: ui.open('/login'), once=True)
+        ui.label('Bitte einloggen …')
+        return
     build_ui()
 
 
