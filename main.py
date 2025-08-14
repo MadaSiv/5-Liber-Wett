@@ -4,7 +4,7 @@ import secrets
 import threading
 from dataclasses import dataclass, field
 from decimal import Decimal, getcontext, ROUND_HALF_UP
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import List, Optional
@@ -280,7 +280,7 @@ def build_ui():
         sven_label = ui.label().style(f'color:{TEXT}; opacity:0.8')
         sevi_label = ui.label().style(f'color:{TEXT}; opacity:0.8')
 
-    # --- Refresh-Funktionen (nutzen Komponenten oben & unten) ---
+    # --- Refresh-Funktionen ---
     def refresh_top():
         with lock:
             pot.recalc_balance()
@@ -289,7 +289,67 @@ def build_ui():
             sven_label.text = f'Sven: {sven:.2f} CHF'
             sevi_label.text = f'Sevi: {sevi:.2f} CHF'
 
-    # ---------- Dialoge / Aktionen ----------
+    # Placeholder; wird nach Tabelle belegt, damit wir ihn hier schon nutzen können
+    def _noop(): ...
+    refresh_table = _noop  # wird unten überschrieben
+
+    # ---------- TRANSFER-DIALOG (vorab gebaut, damit Öffnen 100% klappt) ----------
+    transfer_dialog = ui.dialog()
+
+    with transfer_dialog, ui.card().classes('min-w-[360px]'):
+        ui.label('🔁 Geld transferieren').classes('text-lg font-semibold')
+        tr_payer = ui.select(['Sven', 'Sevi'], value='Sven', label='Zahler').classes('w-full')
+        tr_receiver_label = ui.label().classes('mt-1')
+        tr_amount = ui.input('Betrag (CHF)').classes('w-full')
+        tr_info = ui.label().style('opacity:0.8')
+
+        def tr_update_info():
+            pay = tr_payer.value or 'Sven'
+            rec = 'Sevi' if pay == 'Sven' else 'Sven'
+            tr_receiver_label.text = f'Empfänger: {rec}'
+            with lock:
+                sven_total, sevi_total = pot.person_totals()
+            avail = sven_total if pay == 'Sven' else sevi_total
+            tr_info.text = f'Verfügbar für {pay}: {chf(avail)}'
+            return rec, avail
+
+        tr_payer.on('update:model-value')(lambda _: tr_update_info())
+        tr_update_info()
+
+        def tr_submit():
+            try:
+                raw = (tr_amount.value or "").strip()
+                if not raw:
+                    ui.notify('Bitte Betrag eingeben.', type='negative'); return
+                amt = q(Decimal(raw.replace(",", ".")))
+                if amt <= 0:
+                    ui.notify('Betrag muss > 0 sein.', type='negative'); return
+                receiver, avail = tr_update_info()
+                payer = tr_payer.value or 'Sven'
+                with lock:
+                    res = pot.transfer(amt, payer, receiver)
+                    if res.startswith("Fehler"):
+                        ui.notify(res, type='negative'); return
+                    save_state()
+                ui.notify(res, type='positive')
+                refresh_top(); refresh_table()
+                transfer_dialog.close()
+            except Exception:
+                ui.notify('Ungültiger Betrag.', type='negative')
+
+        tr_amount.on('keydown.enter', lambda e: tr_submit())
+
+        with ui.row().classes('justify-end gap-2 mt-3'):
+            ui.button('Abbrechen', on_click=transfer_dialog.close)
+            ui.button('OK', on_click=tr_submit, color='primary')
+
+    def open_transfer_dialog():
+        # Eingabefeld leeren, Info aktualisieren, Dialog öffnen
+        tr_amount.value = ''
+        tr_update_info()
+        transfer_dialog.open()
+
+    # ---------- WEITERE DIALOGE (on demand) ----------
     def dlg_neue_wette():
         with ui.dialog() as dialog, ui.card().classes('min-w-[360px]'):
             ui.label('🎲 Neue Wette').classes('text-lg font-semibold')
@@ -350,50 +410,7 @@ def build_ui():
                     dialog.close()
                 except Exception:
                     ui.notify('Ungültiger Betrag.', type='negative')
-            with ui.row().classes('justify-end gap-2 mt-3'):
-                ui.button('Abbrechen', on_click=dialog.close)
-                ui.button('OK', on_click=submit, color='primary')
-        dialog.open()
-
-    def dlg_transfer():
-        with ui.dialog() as dialog, ui.card().classes('min-w-[360px]'):
-            ui.label('🔁 Geld transferieren').classes('text-lg font-semibold')
-            payer = ui.select(['Sven', 'Sevi'], value='Sven', label='Zahler').classes('w-full')
-            receiver_label = ui.label().classes('mt-1')
-            amount = ui.input('Betrag (CHF)').classes('w-full')
-            info_line = ui.label().style('opacity:0.8')
-
-            def update_info_and_receiver():
-                pay = payer.value
-                rec = 'Sevi' if pay == 'Sven' else 'Sven'
-                receiver_label.text = f'Empfänger: {rec}'
-                with lock:
-                    sven_total, sevi_total = pot.person_totals()
-                avail = sven_total if pay == 'Sven' else sevi_total
-                info_line.text = f'Verfügbar für {pay}: {chf(avail)}'
-            payer.on('update:model-value')(lambda _: update_info_and_receiver())
-            update_info_and_receiver()
-
-            def submit():
-                try:
-                    raw = (amount.value or "").strip()
-                    if not raw:
-                        ui.notify('Bitte Betrag eingeben.', type='negative'); return
-                    amt = q(Decimal(raw.replace(",", ".")))
-                    if amt <= 0:
-                        ui.notify('Betrag muss > 0 sein.', type='negative'); return
-                    receiver = 'Sevi' if payer.value == 'Sven' else 'Sven'
-                    with lock:
-                        res = pot.transfer(amt, payer.value, receiver)
-                        if res.startswith("Fehler"):
-                            ui.notify(res, type='negative'); return
-                        save_state()
-                    ui.notify(res, type='positive')
-                    refresh_top(); refresh_table()
-                    dialog.close()
-                except Exception:
-                    ui.notify('Ungültiger Betrag.', type='negative')
-
+            amount.on('keydown.enter', lambda e: submit())
             with ui.row().classes('justify-end gap-2 mt-3'):
                 ui.button('Abbrechen', on_click=dialog.close)
                 ui.button('OK', on_click=submit, color='primary')
@@ -445,11 +462,11 @@ def build_ui():
     with ui.column().classes('gap-2 px-3 pt-2 max-w-screen-sm mx-auto'):
         ui.button('🎲 Neue Wette', on_click=dlg_neue_wette).classes('w-full py-3 rounded-xl shadow-sm')
         ui.button('🍺 Bier bezahlen', on_click=dlg_bier_bezahlen).classes('w-full py-3 rounded-xl shadow-sm')
-        ui.button('🔁 Geld transferieren', on_click=dlg_transfer).classes('w-full py-3 rounded-xl shadow-sm')
+        ui.button('🔁 Geld transferieren', on_click=open_transfer_dialog).classes('w-full py-3 rounded-xl shadow-sm')
         ui.button('🤝 Ausgleich vorschlagen', on_click=dlg_ausgleich).classes('w-full py-3 rounded-xl shadow-sm')
         ui.button('🧹 Verlauf & Saldo löschen', on_click=do_reset).props('color=negative').classes('w-full py-3 rounded-xl shadow-sm')
 
-    # ---------- VERLAUF (BREITER) ----------
+    # ---------- VERLAUF (BREIT) ----------
     table_rows: list[dict] = []
 
     def rebuild_rows() -> None:
@@ -482,11 +499,8 @@ def build_ui():
         {'name': 'Kommentar', 'label': 'Kommentar', 'field': 'Kommentar', 'sortable': True},
     ]
 
-    last_reset_label = None  # wird gleich belegt
-
     with ui.card().classes('m-3 w-full max-w-screen-2xl mx-auto'):
         ui.label('📜 Verlauf').style(f'color:{TEXT}; font-weight:600')
-        # grosszügig in der Breite, Höhe begrenzt mit Sticky-Header
         with ui.scroll_area().style('max-height: 75vh'):
             table = ui.table(
                 columns=columns,
@@ -495,7 +509,7 @@ def build_ui():
             ).props('flat bordered dense sticky-header wrap-cells')
         last_reset_label = ui.label().style('opacity:0.7; display:block; margin-top:6px')
 
-    def refresh_table():
+    def _refresh_table_impl():
         rebuild_rows()
         table.update()
         with lock:
@@ -504,11 +518,12 @@ def build_ui():
             else:
                 last_reset_label.text = "Zuletzt zurückgesetzt: " + pot.last_reset.astimezone(CH_TZ).strftime("%d.%m.%Y %H:%M")
 
+    # jetzt den Platzhalter überschreiben
+    refresh_table = _refresh_table_impl
+
     # Initial refresh
-    def initial_refresh():
-        refresh_top()
-        refresh_table()
-    initial_refresh()
+    refresh_top()
+    refresh_table()
 
 
 def is_authed() -> bool:
@@ -538,8 +553,7 @@ def login_page():
         def do_login():
             if not APP_PASSWORD:
                 app.storage.user['auth_ok'] = True
-                ui.navigate.to('/app')
-                return
+                ui.navigate.to('/app'); return
             if (pwd.value or "") == APP_PASSWORD:
                 app.storage.user['auth_ok'] = True
                 ui.navigate.to('/app')
@@ -548,7 +562,6 @@ def login_page():
 
         # Enter-Handling für das Passwortfeld
         pwd.on('keydown.enter', lambda e: do_login())
-
         ui.button('Login', on_click=do_login, color='primary').classes('mt-3')
 
 
