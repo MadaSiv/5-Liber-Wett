@@ -168,6 +168,7 @@ class Pot:
         return f"Bezahlt: {chf(amount)} für Bier (Zahler: {payer}). Neuer Saldo: {chf(self.balance)}"
 
     def transfer(self, amount: Decimal, payer: str, receiver: str, comment: str = "Ausgleich") -> str:
+        """Umbuchung zwischen Personen; Pot-Saldo bleibt 0. Validiert verfügbare Beträge."""
         amount = q(amount)
         if amount <= 0:
             return "Fehler: Betrag muss > 0 sein."
@@ -177,6 +178,7 @@ class Pot:
         available = sven_total if payer == "Sven" else sevi_total
         if amount > available:
             return f"Fehler: {payer} hat nur {chf(available)} verfügbar für Transfer."
+        # Pot-Saldo bleibt unverändert
         self.history.append(Transaction(datetime.now(CH_TZ), Kind.TRANSFER, "", comment, Decimal("0.00"), payer, receiver, amount))
         return f"Transfer verbucht: {payer} → {receiver} {chf(amount)} (Pot unverändert: {chf(self.balance)})"
 
@@ -274,11 +276,19 @@ def build_ui():
                 ui.button('Logout', on_click=do_logout).props('flat')
 
     # Personensalden
-    with ui.row().classes('items-center gap-6 px-4 py-1'):
+    with ui.row().classes('items-center gap-4 px-4 py-1'):
         sven_label = ui.label().style(f'color:{TEXT}; opacity:0.8')
         sevi_label = ui.label().style(f'color:{TEXT}; opacity:0.8')
 
-    # Verlaufstabelle
+    # ---------- FUNKTIONS-BUTTONS (MOBILE-FIRST, VOR VERLAUF) ----------
+    with ui.column().classes('gap-2 px-3 pt-2 max-w-screen-sm mx-auto'):
+        ui.button('🎲 Neue Wette', on_click=lambda: dlg_neue_wette()).classes('w-full py-3 rounded-xl shadow-sm')
+        ui.button('🍺 Bier bezahlen', on_click=lambda: dlg_bier_bezahlen()).classes('w-full py-3 rounded-xl shadow-sm')
+        ui.button('🔁 Geld transferieren', on_click=lambda: dlg_transfer()).classes('w-full py-3 rounded-xl shadow-sm')
+        ui.button('🤝 Ausgleich vorschlagen', on_click=lambda: dlg_ausgleich()).classes('w-full py-3 rounded-xl shadow-sm')
+        ui.button('🧹 Verlauf & Saldo löschen', on_click=lambda: do_reset()).props('color=negative').classes('w-full py-3 rounded-xl shadow-sm')
+
+    # ---------- VERLAUF ----------
     table_rows: list[dict] = []
     sum_label = ui.label().style(f'color:{TEXT}; font-weight:700')
 
@@ -323,9 +333,15 @@ def build_ui():
         {'name': 'Kommentar', 'label': 'Kommentar', 'field': 'Kommentar', 'sortable': True},
     ]
 
-    with ui.card().classes('m-4'):
+    with ui.card().classes('m-3 max-w-screen-lg mx-auto'):
         ui.label('📜 Verlauf').style(f'color:{TEXT}; font-weight:600')
-        table = ui.table(columns=columns, rows=table_rows, row_key='Zeit').props('flat').classes('w-full')
+        # Scrollbarer Bereich mit sticky Header für Mobile
+        with ui.scroll_area().style('max-height: 60vh'):
+            table = ui.table(
+                columns=columns,
+                rows=table_rows,
+                row_key='Zeit',
+            ).props('flat bordered dense wrap-cells sticky-header')
         with ui.row().classes('justify-between items-center mt-2'):
             last_reset_label = ui.label().style('opacity:0.7')
             sum_label
@@ -339,7 +355,7 @@ def build_ui():
             else:
                 last_reset_label.text = "Zuletzt zurückgesetzt: " + pot.last_reset.astimezone(CH_TZ).strftime("%d.%m.%Y %H:%M")
 
-    # Dialoge / Aktionen
+    # ---------- Dialoge / Aktionen ----------
     def dlg_neue_wette():
         with ui.dialog() as dialog, ui.card().classes('min-w-[360px]'):
             ui.label('🎲 Neue Wette').classes('text-lg font-semibold')
@@ -355,7 +371,10 @@ def build_ui():
                 try:
                     stake = STAKE
                     if is_standard.value == 'Individuell':
-                        stake = q(Decimal((stake_in.value or "").replace(",", ".")))
+                        raw = (stake_in.value or "").strip()
+                        if not raw:
+                            ui.notify('Bitte Einsatz eingeben.', type='negative'); return
+                        stake = q(Decimal(raw.replace(",", ".")))
                         if stake <= 0:
                             ui.notify('Einsatz muss > 0 sein.', type='negative'); return
                     sven_ok = ('Sven richtig?' in (sven_richtig.value or []))
@@ -372,19 +391,21 @@ def build_ui():
             with ui.row().classes('justify-end gap-2 mt-3'):
                 ui.button('Abbrechen', on_click=dialog.close)
                 ui.button('OK', on_click=submit, color='primary')
-
         dialog.open()
 
     def dlg_bier_bezahlen():
         with ui.dialog() as dialog, ui.card().classes('min-w-[360px]'):
             ui.label('🍺 Bier bezahlen').classes('text-lg font-semibold')
-            payer = ui.select(['Sven', 'Sevi'], value='Sven', label='Zahler')
-            amount = ui.input('Betrag (CHF)')
-            comment = ui.input('Kommentar (optional)')
+            payer = ui.select(['Sven', 'Sevi'], value='Sven', label='Zahler').classes('w-full')
+            amount = ui.input('Betrag (CHF)').classes('w-full')
+            comment = ui.input('Kommentar (optional)').classes('w-full')
 
             def submit():
                 try:
-                    betrag = Decimal((amount.value or "").replace(",", "."))
+                    raw = (amount.value or "").strip()
+                    if not raw:
+                        ui.notify('Bitte Betrag eingeben.', type='negative'); return
+                    betrag = Decimal(raw.replace(",", "."))
                     with lock:
                         msg = pot.pay_beer(betrag, payer.value)
                         if msg.startswith("Fehler"):
@@ -403,22 +424,30 @@ def build_ui():
     def dlg_transfer():
         with ui.dialog() as dialog, ui.card().classes('min-w-[360px]'):
             ui.label('🔁 Geld transferieren').classes('text-lg font-semibold')
-            payer = ui.select(['Sven', 'Sevi'], value='Sven', label='Zahler')
-            amount = ui.input('Betrag (CHF)')
+            payer = ui.select(['Sven', 'Sevi'], value='Sven', label='Zahler').classes('w-full')
+            receiver_label = ui.label().classes('mt-1')
+            amount = ui.input('Betrag (CHF)').classes('w-full')
             info_line = ui.label().style('opacity:0.8')
 
-            def update_info():
+            def update_info_and_receiver():
+                pay = payer.value
+                rec = 'Sevi' if pay == 'Sven' else 'Sven'
+                receiver_label.text = f'Empfänger: {rec}'
                 with lock:
                     sven_total, sevi_total = pot.person_totals()
-                avail = sven_total if payer.value == 'Sven' else sevi_total
-                info_line.text = f'Verfügbar für {payer.value}: {chf(avail)}'
-
-            payer.on('update:model-value')(lambda _: update_info())
-            update_info()
+                avail = sven_total if pay == 'Sven' else sevi_total
+                info_line.text = f'Verfügbar für {pay}: {chf(avail)}'
+            payer.on('update:model-value')(lambda _: update_info_and_receiver())
+            update_info_and_receiver()
 
             def submit():
                 try:
-                    amt = q(Decimal((amount.value or "").replace(",", ".")))
+                    raw = (amount.value or "").strip()
+                    if not raw:
+                        ui.notify('Bitte Betrag eingeben.', type='negative'); return
+                    amt = q(Decimal(raw.replace(",", ".")))
+                    if amt <= 0:
+                        ui.notify('Betrag muss > 0 sein.', type='negative'); return
                     receiver = 'Sevi' if payer.value == 'Sven' else 'Sven'
                     with lock:
                         res = pot.transfer(amt, payer.value, receiver)
@@ -430,6 +459,7 @@ def build_ui():
                     dialog.close()
                 except Exception:
                     ui.notify('Ungültiger Betrag.', type='negative')
+
             with ui.row().classes('justify-end gap-2 mt-3'):
                 ui.button('Abbrechen', on_click=dialog.close)
                 ui.button('OK', on_click=submit, color='primary')
@@ -439,17 +469,17 @@ def build_ui():
         with lock:
             sven, sevi = pot.person_totals()
             if sven < 0 and sevi > 0:
-                amount = min(sevi, -sven); payer, receiver = "Sevi", "Sven"
+                amount = min(sevi, -sven); payer_name, receiver_name = "Sevi", "Sven"
             elif sevi < 0 and sven > 0:
-                amount = min(sven, -sevi); payer, receiver = "Sven", "Sevi"
+                amount = min(sven, -sevi); payer_name, receiver_name = "Sven", "Sevi"
             else:
                 ui.notify('Kein Ausgleich nötig – niemand ist im Minus.', type='info'); return
         with ui.dialog() as dialog, ui.card():
             ui.label('🤝 Ausgleich vorschlagen').classes('text-lg font-semibold')
-            ui.label(f'Vorschlag: {payer} → {receiver} {chf(amount)}.\nDirekt buchen?')
+            ui.label(f'Vorschlag: {payer_name} → {receiver_name} {chf(amount)}.\nDirekt buchen?')
             def do_book():
                 with lock:
-                    res = pot.transfer(amount, payer, receiver, comment="Autom. Ausgleich")
+                    res = pot.transfer(amount, payer_name, receiver_name, comment="Autom. Ausgleich")
                     if res.startswith("Fehler"):
                         ui.notify(res, type='negative'); return
                     save_state()
@@ -461,33 +491,21 @@ def build_ui():
                 ui.button('Buchen', on_click=do_book, color='primary')
         dialog.open()
 
-    # Aktions-Buttons
-    with ui.row().classes('gap-2 px-4'):
-        ui.button('🎲 Neue Wette', on_click=dlg_neue_wette)
-        ui.button('🍺 Bier bezahlen', on_click=dlg_bier_bezahlen)
-        ui.button('🔁 Geld transferieren', on_click=dlg_transfer)
-        ui.button('🤝 Ausgleich vorschlagen', on_click=dlg_ausgleich)
-        # Reset-Dialog-Funktion (vergessen oben zu definieren)
-        def do_reset():
-            with ui.dialog() as dialog, ui.card():
-                ui.label('🧹 Verlauf & Saldo löschen').classes('text-lg font-semibold')
-                ui.label('Wirklich Verlauf & Saldo komplett löschen?')
-                def yes():
-                    with lock:
-                        pot.reset()
-                        save_state()
-                    refresh_top(); refresh_table()
-                    ui.notify('Verlauf und Saldo wurden gelöscht.', type='positive')
-                    dialog.close()
-                with ui.row().classes('justify-end gap-2 mt-3'):
-                    ui.button('Abbrechen', on_click=dialog.close)
-                    ui.button('Löschen', on_click=yes, color='negative')
-            dialog.open()
-        ui.button('🧹 Verlauf & Saldo löschen', on_click=do_reset).props('color=negative')
-
-    # Footer
-    with ui.footer().classes('justify-end'):
-        ui.label('Made with NiceGUI')
+    def do_reset():
+        with ui.dialog() as dialog, ui.card():
+            ui.label('🧹 Verlauf & Saldo löschen').classes('text-lg font-semibold')
+            ui.label('Wirklich Verlauf & Saldo komplett löschen?')
+            def yes():
+                with lock:
+                    pot.reset()
+                    save_state()
+                refresh_top(); refresh_table()
+                ui.notify('Verlauf und Saldo wurden gelöscht.', type='positive')
+                dialog.close()
+            with ui.row().classes('justify-end gap-2 mt-3'):
+                ui.button('Abbrechen', on_click=dialog.close)
+                ui.button('Löschen', on_click=yes, color='negative')
+        dialog.open()
 
     # Initial refresh
     def initial_refresh():
