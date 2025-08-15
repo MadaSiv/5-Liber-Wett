@@ -11,7 +11,7 @@ from typing import List, Optional
 import json
 import csv
 import io
-import urllib.parse  # <- NEU
+import urllib.parse  # für CSV-Download Fallback
 
 from nicegui import ui, app
 
@@ -25,8 +25,9 @@ getcontext().rounding = ROUND_HALF_UP
 STAKE = Decimal("5.00")
 CENT = Decimal("0.01")
 
-# Passwortschutz (optional)
-APP_PASSWORD = os.getenv("APP_PASSWORD")  # wenn None/"" → kein Login nötig
+# Passwörter
+APP_PASSWORD = os.getenv("APP_PASSWORD")        # Hauptlogin (optional)
+GUEST_PASSWORD = os.getenv("GUEST_PASSWORD")    # Gästelogin (optional)
 
 # Speicherort (JSON-Fallback)
 APP_DIR = Path(os.getenv("APP_DIR", str(Path.cwd() / "data")))
@@ -344,15 +345,16 @@ def ts_fmt(dt: datetime) -> str:
     return dt.astimezone(CH_TZ).strftime("%d.%m.%Y %H:%M")
 
 
+# ----------------- Haupt-UI (Admin) -----------------
 def build_ui():
     """Haupt-App (nur für eingeloggte Nutzer)."""
 
-    # --- Logout-Handler (wird unten verwendet) ---
+    # --- Logout-Handler ---
     def do_logout():
         app.storage.user.pop('auth_ok', None)
         ui.navigate.to('/login')
 
-    # ---------- STICKY BAR: Titel + Salden (immer sichtbar) ----------
+    # ---------- STICKY BAR: Titel + Salden ----------
     with ui.element('div').classes('w-full bg-white shadow-sm').style(
         'position: sticky; top: 0; z-index: 1000;'
     ):
@@ -819,11 +821,11 @@ def build_ui():
                     ts_name = datetime.now(CH_TZ).strftime("%Y%m%d_%H%M%S")
                     filename = f"verlauf_export_{ts_name}.csv"
 
-                    # 1) Versuche NiceGUI-eigenes Download
+                    # 1) NiceGUI-Download
                     try:
                         ui.download(content=csv_text, filename=filename)
                     except Exception:
-                        # 2) Fallback: Data-URL + JS (funktioniert überall)
+                        # 2) Fallback: Data-URL + JS
                         data_url = "data:text/csv;charset=utf-8," + urllib.parse.quote(csv_text)
                         ui.run_javascript(
                             "const a=document.createElement('a');"
@@ -912,10 +914,10 @@ def build_ui():
                 with ui.row().classes('justify-end gap-2 mt-3'):
                     ui.button('Abbrechen', on_click=import_dialog.close)
 
-            ui.button('✏️ Eintrag bearbeiten', on_click=edit_selected)
-            ui.button('🗑️ Eintrag löschen', on_click=delete_selected).props('color=negative')
-            ui.button('⬇️ Verlauf exportieren', on_click=export_csv)
-            ui.button('⬆️ Verlauf importieren', on_click=import_dialog.open)
+            ui.button('✏️ Eintrag bearbeiten (Auswahl)', on_click=edit_selected)
+            ui.button('🗑️ Eintrag löschen (Auswahl)', on_click=delete_selected).props('color=negative')
+            ui.button('⬇️ Verlauf exportieren (CSV)', on_click=export_csv)
+            ui.button('⬆️ Verlauf importieren (CSV)', on_click=import_dialog.open)
 
         with ui.scroll_area().style('max-height: 75vh'):
             table = ui.table(columns=columns, rows=table_rows, row_key='id').props(
@@ -926,7 +928,7 @@ def build_ui():
     # ---------- Logout unten rechts ----------
     if APP_PASSWORD:
         with ui.row().classes('justify-end m-3'):
-            ui.button('Tschüüüs', on_click=do_logout).props('flat')
+            ui.button('Logout', on_click=do_logout).props('flat')
 
     def _refresh_table_impl():
         rebuild_rows(); table.update()
@@ -940,12 +942,81 @@ def build_ui():
     refresh_top(); refresh_table()
 
 
+# ----------------- Gäste-UI (nur Wette platzieren) -----------------
+def build_guest_ui():
+    """Gäste-App: nur Wette platzieren, keine Salden/Verläufe sichtbar."""
+
+    def do_logout():
+        app.storage.user.pop('guest_ok', None)
+        ui.navigate.to('/guest')
+
+    # Kopf (ohne Saldi)
+    with ui.element('div').classes('w-full bg-white shadow-sm').style(
+        'position: sticky; top: 0; z-index: 1000;'
+    ):
+        with ui.column().classes('w-full px-3 py-2'):
+            ui.label('🍺 5-Franken-Wette – Gäste').style(f'color:{TEXT}; font-weight:700; font-size:20px')
+            ui.label('Nur Wette platzieren (keine Saldi sichtbar)').style('opacity:0.8')
+
+    # Formular „Wette platzieren“
+    with ui.card().classes('max-w-sm mx-auto mt-6'):
+        ui.label('🎲 Wette platzieren').classes('text-lg font-semibold')
+        is_standard = ui.toggle(['5-Liber', 'Individuell'], value='5-Liber').classes('my-2')
+        stake_in = ui.input('Einsatz je Person (CHF)').bind_visibility_from(is_standard, 'value', lambda v: v == 'Individuell')
+        stake_in.value = f"{STAKE:.2f}"
+        sven_richtig = ui.toggle(['Sven richtig?'], value=[]).classes('mt-2')
+        sevi_richtig = ui.toggle(['Sevi richtig?'], value=[]).classes('mt-1')
+        comment = ui.input('Kommentar (optional)').classes('mt-2')
+
+        def submit():
+            try:
+                stake = STAKE
+                if is_standard.value == 'Individuell':
+                    raw = (stake_in.value or "").strip()
+                    if not raw:
+                        ui.notify('Bitte Einsatz eingeben.', type='negative'); return
+                    stake = q(Decimal(raw.replace(",", ".")))
+                    if stake <= 0:
+                        ui.notify('Einsatz muss > 0 sein.', type='negative'); return
+                sven_ok = ('Sven richtig?' in (sven_richtig.value or []))
+                sevi_ok = ('Sevi richtig?' in (sevi_richtig.value or []))
+                with lock:
+                    msg = pot.add_bet(sven_ok, sevi_ok, comment.value or "", stake); save_state()
+                ui.notify('Wette erfasst. Danke! ✅', type='positive')
+                # Felder zurücksetzen
+                is_standard.value = '5-Liber'
+                stake_in.value = f"{STAKE:.2f}"
+                sven_richtig.value = []
+                sevi_richtig.value = []
+                comment.value = ''
+            except Exception:
+                ui.notify('Ungültige Eingabe.', type='negative')
+
+        # Enter auf Stake/Kommentar löst Submit aus
+        stake_in.on('keydown.enter', lambda e: submit())
+        comment.on('keydown.enter', lambda e: submit())
+
+        with ui.row().classes('justify-end gap-2 mt-3'):
+            ui.button('OK', on_click=submit, color='primary')
+
+    # Logout unten rechts
+    with ui.row().classes('justify-end m-3'):
+        ui.button('Logout', on_click=do_logout).props('flat')
+
+
+# ----------------- Auth Helpers -----------------
 def is_authed() -> bool:
     return not APP_PASSWORD or app.storage.user.get('auth_ok') is True
 
 
+def is_guest_authed() -> bool:
+    return (GUEST_PASSWORD is None or GUEST_PASSWORD == "") and True or app.storage.user.get('guest_ok') is True
+
+
+# ----------------- Seiten -----------------
 @ui.page('/')
 def index():
+    # Standard: auf Haupt-App weiterleiten (Admin)
     ui.timer(0.01, lambda: ui.navigate.to('/app'), once=True)
     ui.label('Lade …')
 
@@ -957,7 +1028,7 @@ def login_page():
         ui.label('Schon eingeloggt, weiterleiten …'); return
 
     with ui.card().classes('max-w-sm mx-auto mt-24'):
-        ui.label('🔒 Morgää').classes('text-lg font-semibold')
+        ui.label('🔒 Login (Haupt)').classes('text-lg font-semibold')
         pwd = ui.input('Passwort', password=True, password_toggle_button=True).classes('mt-2')
 
         def do_login():
@@ -969,7 +1040,9 @@ def login_page():
                 ui.notify('Falsches Passwort', type='negative')
 
         pwd.on('keydown.enter', lambda e: do_login())
-        ui.button('Login', on_click=do_login, color='primary').classes('mt-3')
+        with ui.row().classes('justify-between w-full mt-3'):
+            ui.link('➡️ Gäste-Login', '/guest')
+            ui.button('Login', on_click=do_login, color='primary')
 
 
 @ui.page('/app')
@@ -980,6 +1053,45 @@ def app_page():
     build_ui()
 
 
+@ui.page('/guest')
+def guest_login_page():
+    if is_guest_authed():
+        ui.timer(0.01, lambda: ui.navigate.to('/guest/app'), once=True)
+        ui.label('Schon eingeloggt (Gast), weiterleiten …'); return
+
+    with ui.card().classes('max-w-sm mx-auto mt-24'):
+        ui.label('👋 Gäste-Login').classes('text-lg font-semibold')
+        if GUEST_PASSWORD:
+            pwd = ui.input('Passwort (Gast)', password=True, password_toggle_button=True).classes('mt-2')
+
+            def do_login():
+                if (pwd.value or "") == GUEST_PASSWORD:
+                    app.storage.user['guest_ok'] = True; ui.navigate.to('/guest/app')
+                else:
+                    ui.notify('Falsches Passwort', type='negative')
+
+            pwd.on('keydown.enter', lambda e: do_login())
+            with ui.row().classes('justify-between w-full mt-3'):
+                ui.link('🔑 Haupt-Login', '/login')
+                ui.button('Login', on_click=do_login, color='primary')
+        else:
+            ui.markdown('Kein Passwort erforderlich.').classes('opacity-80')
+            def do_login_open():
+                app.storage.user['guest_ok'] = True; ui.navigate.to('/guest/app')
+            with ui.row().classes('justify-between w-full mt-3'):
+                ui.link('🔑 Haupt-Login', '/login')
+                ui.button('Weiter', on_click=do_login_open, color='primary')
+
+
+@ui.page('/guest/app')
+def guest_app_page():
+    if not is_guest_authed():
+        ui.timer(0.01, lambda: ui.navigate.to('/guest'), once=True)
+        ui.label('Bitte als Gast einloggen …'); return
+    build_guest_ui()
+
+
+# ----------------- Start -----------------
 STORAGE_SECRET = os.getenv("STORAGE_SECRET") or secrets.token_urlsafe(32)
 ui.run(
     title='5 Franken Wette',
